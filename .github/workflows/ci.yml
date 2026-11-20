@@ -19,4 +19,4 @@ jobs:
       - run: npm ci || npm install
       - run: npm run build
       - run: npm test
-      - run: node scripts/verify-phase1.mjs
+      - run: node scripts/verify-phase2.mjs
