@@ -8,16 +8,18 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const CONTRACT_PATH = path.join(ROOT, 'game.contract.json');
 const CLI_PATH = path.join(ROOT, 'dist-headless', 'headless', 'cli.js');
 
-describe('Test Contract v1.2 compliance', () => {
-  it('game.contract.json exists and matches DEFAULT_TUNING (Contract v1.2)', () => {
+describe('Test Contract v1.3 compliance', () => {
+  it('game.contract.json exists and matches DEFAULT_TUNING (Contract v1.3)', () => {
     const raw = fs.readFileSync(CONTRACT_PATH, 'utf-8');
     const contract = JSON.parse(raw);
 
-    expect(contract.contract_version).toBe('1.2');
+    expect(contract.contract_version).toBe('1.3');
     expect(contract.team).toBe('2A202603605-NguyenHaAnh');
     expect(contract.build_cmd).toBeTruthy();
     expect(contract.run_cmd).toBeTruthy();
     expect(contract.headless_cmd).toBeTruthy();
+    expect(contract.bench_cmd).toBeTruthy();
+    expect(contract.soak_cmd).toBeTruthy();
     expect(contract.tuning).toEqual(DEFAULT_TUNING);
   });
 

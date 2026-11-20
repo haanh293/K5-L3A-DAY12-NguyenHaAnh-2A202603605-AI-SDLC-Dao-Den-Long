@@ -14,7 +14,14 @@
 
 ## Phase 3 (Ticket-03 Change Request "Đèn cạn dầu" · Contract v1.2)
 - **Công cụ AI:** Antigravity (Gemini)
-- **Cách tiết kiệm token:**
-  - Dùng `edit_file` cục bộ trên `maps.ts`, `cli.ts`, `scene.ts`, `main.ts`, `index.html`, `style.css` thay vì viết lại toàn bộ file lớn.
-  - Thiết kế đơn vị dầu nguyên `1/60` (`fuelSixtieths`) từ đầu nên 24/24 test (gồm regression Phase 1–2 + 6 test Phase 3) pass ngay lần chạy đầu tiên mà không phải debug sai số số thực!
-- **Ước tính token Phase 3:** ~34,000 input / ~13,000 output tokens (hoàn thành trọn gọn trong khung 30 phút).
+- **Cách tiết kiệm token:** Dùng `edit_file` cục bộ trên các file client/CLI; dùng đơn vị dầu nguyên `1/60` (`fuelSixtieths`) từ đầu nên 24/24 test pass ngay lượt đầu.
+- **Ước tính token Phase 3:** ~34,000 input / ~13,000 output tokens.
+
+## Phase 4 (Ticket-04 "Bình minh: phát hành v1.0.0" · Contract v1.3)
+- **Công cụ AI:** Antigravity (Gemini)
+- **Cách tiết kiệm token:** Tối ưu `InstancedMesh` ngay khi nâng cấp `scene.ts` để benchmark đạt 535.5 FPS ngay lần chạy đầu; chạy song song viết tài liệu trong lúc Chrome thực thi benchmark 30 giây.
+- **Lỗi AI phát hiện qua kiểm chứng thật:** Soak Test lần chạy đầu ghi nhận `mem_end_mb / mem_start_mb = 1.28x` (vượt ngưỡng `1.20x`) do cấp phát `.filter().sort()` trong `findNearestLantern()` và object `prevInput` mỗi tick. Đã tối ưu zero-allocation + `--expose-gc`, giảm xuống `1.13x`.
+- **Ước tính token Phase 4:** ~52,000 input / ~22,000 output tokens.
+
+---
+**Tổng cộng 4 phase:** ~160,000 input tokens / ~62,500 output tokens. Chi tiết tổng kết xem tại [docs/notes/RETRO.md](RETRO.md).
