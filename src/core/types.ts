@@ -12,7 +12,9 @@ export interface ScoreTuning {
 export interface GameTuning {
   player_speed: number;
   carry_capacity: number;
+  capacity_max: number;
   lantern_cost: number;
+  relight_cost: number;
   lantern_count_night1: number;
   pickup_radius: number;
   interact_radius: number;
@@ -34,6 +36,12 @@ export interface GameTuning {
   dash_speed: number;
   dash_duration_s: number;
   dash_cooldown_s: number;
+  fuel_max: number;
+  fuel_decay_per_s: number;
+  fuel_per_mote: number;
+  win_ratio: number;
+  drain_per_s: number;
+  low_fuel_threshold: number;
   score: ScoreTuning;
 }
 
@@ -63,15 +71,18 @@ export interface TickInputState {
 }
 
 export type GameState = 'playing' | 'paused' | 'won' | 'lost';
-export type ShadeState = 'spawning' | 'wander' | 'chase' | 'recoil' | 'stunned';
+export type ShadeState = 'spawning' | 'wander' | 'chase' | 'recoil' | 'stunned' | 'drain';
 export type DrifterState = 'idle' | 'chase' | 'flee';
 export type MoteKind = 'random' | 'dropped';
+export type GameOverReason = 'dawn_survived' | 'dawn' | 'no_flames';
 
 export interface ScenarioLantern {
   id: string;
   pos?: Vec3;
   deposited?: number;
   lit?: boolean;
+  fuel?: number;
+  ever_lit?: boolean;
 }
 
 export interface ScenarioShade {
@@ -79,6 +90,7 @@ export interface ScenarioShade {
   pos: Vec3;
   state?: ShadeState;
   state_ticks_left?: number;
+  target_lantern_id?: string;
 }
 
 export interface ScenarioDrifter {
@@ -109,6 +121,7 @@ export interface ScenarioConfig {
     dash_cd_ticks?: number;
     pulse_cd_ticks?: number;
     charm_ticks?: number;
+    successful_lights?: number;
   };
   random_motes?: boolean;
   random_shades?: boolean;
@@ -128,6 +141,7 @@ export interface PlayerEntity {
   grounded: boolean;
   flames: number;
   carried: number;
+  successfulLights: number;
   invulnTicks: number;
   dashTicksLeft: number;
   dashDir: [number, number];
@@ -144,6 +158,9 @@ export interface LanternEntity {
   pos: Vec3;
   lit: boolean;
   deposited: number;
+  fuelSixtieths: number; // Integer 0..6000 (1/60 fuel units)
+  everLit: boolean;
+  relitCount: number;
 }
 
 export interface ShadeEntity {
@@ -152,6 +169,8 @@ export interface ShadeEntity {
   hoverOffset: number;
   state: ShadeState;
   stateTicksLeft: number;
+  targetLanternId: string | null;
+  drainTicks: number;
   pulsePushTicksLeft: number;
   pulsePushDir: [number, number];
   recoilDir: [number, number];
@@ -213,6 +232,7 @@ export interface SnapshotLine {
     grounded: boolean;
     flames: number;
     carried: number;
+    capacity: number;
     invuln: boolean;
     dash_cd_s: number;
     pulse_cd_s: number;
@@ -223,6 +243,9 @@ export interface SnapshotLine {
     pos: Vec3;
     lit: boolean;
     deposited: number;
+    fuel: number;
+    ever_lit: boolean;
+    relit_count: number;
   }>;
   shades: Array<{
     id: string;
@@ -256,6 +279,9 @@ export interface EventLine {
     | 'mote_picked'
     | 'deposit'
     | 'lantern_lit'
+    | 'refuel'
+    | 'lantern_out'
+    | 'fuel_drain'
     | 'pulse'
     | 'player_hit'
     | 'shade_spawned'

@@ -5,7 +5,7 @@ export const DT = 1 / TICK_RATE;
 export const GRAVITY = 20;
 export const JUMP_SPEED = 7.0;
 
-// Standardized Phase 2 constants (ticks & gameplay rules)
+// Standardized Phase 2 & 3 constants (integer tick/fuel units)
 export const DASH_TICKS = 12; // 0.2s * 60
 export const DASH_COOLDOWN_TICKS = 90; // 1.5s * 60
 export const PULSE_COOLDOWN_TICKS = 180; // 3.0s * 60
@@ -21,6 +21,8 @@ export const SHADE_RECOIL_TICKS = 60;
 export const SHADE_RECOIL_DIST = 2.0;
 export const SHADE_DETECT_RADIUS = 12.0;
 export const SHADE_DISENGAGE_RADIUS = 18.0;
+export const SHADE_DRAIN_ENGAGE_RADIUS = 2.0;
+export const SHADE_DRAIN_CHASE_RADIUS = 6.0;
 export const SHADE_SPAWN_MIN_PLAYER_DIST = 15.0;
 export const SHADE_SPAWNING_TICKS = 30;
 export const SHADE_NIGHT3_SPEED = 4.5;
@@ -29,6 +31,17 @@ export const SHADE_HIT_HEIGHT_DIFF = 1.5;
 export const INITIAL_MOTE_COUNT = 20;
 export const MAX_MOTE_COUNT = 30;
 export const MOTE_SPAWN_INTERVAL_TICKS = 240;
+
+// Phase 3 Fuel & Scoring constants (exact 1/60 integer units)
+export const FUEL_MAX_60 = 100 * TICK_RATE; // 6000
+export const FUEL_LOW_THRESHOLD_60 = 30 * TICK_RATE; // 1800
+export const FUEL_PER_MOTE_60 = 10 * TICK_RATE; // 600
+export const FUEL_DECAY_PER_TICK_60 = 1; // 1/60 per tick = 1.0/s
+export const FUEL_DRAIN_PER_TICK_60 = 5; // 5/60 per tick = 5.0/s
+export const FUEL_DRAIN_EVENT_INTERVAL = 60;
+export const SCORE_RELIGHT = 40;
+export const SCORE_STUN_DRAINING = 15;
+export const SCORE_DAWN_PER_LIT_BASE = 50;
 
 export const CHARM_SPEED = 7.2;
 export const CHARM_DURATION_TICKS = 600;
@@ -52,21 +65,23 @@ export const WIND_WARNING_TICKS = 120; // warned 2s before
 export const WIND_PUSH_SPEED = 2.0;
 
 /**
- * Standardized Phase 2 tuning values.
- * Must match game.contract.json (Contract v1.1) 100%.
+ * Standardized Phase 3 tuning values.
+ * Must match game.contract.json (Contract v1.2) 100%.
  */
 export const DEFAULT_TUNING: GameTuning = {
   player_speed: 6.0,
   carry_capacity: 10,
+  capacity_max: 20,
   lantern_cost: 10,
+  relight_cost: 5,
   lantern_count_night1: 5,
   pickup_radius: 1.0,
   interact_radius: 2.0,
   pulse_cost: 3,
   pulse_radius: 5.0,
-  night1_duration_s: 300,
-  night2_duration_s: 330,
-  night3_duration_s: 360,
+  night1_duration_s: 240,
+  night2_duration_s: 270,
+  night3_duration_s: 300,
   flames: 3,
   invuln_s: 1.5,
   hit_drop_ratio: 0.5,
@@ -80,17 +95,23 @@ export const DEFAULT_TUNING: GameTuning = {
   dash_speed: 14.0,
   dash_duration_s: 0.2,
   dash_cooldown_s: 1.5,
+  fuel_max: 100,
+  fuel_decay_per_s: 1.0,
+  fuel_per_mote: 10,
+  win_ratio: 0.6,
+  drain_per_s: 5,
+  low_fuel_threshold: 30,
   score: {
-    per_mote: 10,
+    per_mote: 5,
     per_lantern: 100,
     per_stun: 5,
-    per_second_left: 2,
+    per_second_left: 0,
     per_flame_left: 50,
   },
 };
 
 /**
- * Standardized Phase 2 Color Palette (exact hexes from Ticket-02).
+ * Standardized Color Palette + Colorblind overrides (Ticket-02 & Ticket-03).
  */
 export const PALETTE = {
   sky: 0x0e1430,
@@ -106,14 +127,21 @@ export const PALETTE = {
   moteHalo: 0xffe58a,
   shadeBody: 0x120a1a,
   shadeRim: 0x7a3cff,
+  shadeRimColorblind: 0x00b3ff,
   shadeStunned: 0x3a3450,
   mayCloak: 0xe8e2d0,
   mayScarfAndCharm: 0xc8102e,
   goldTrim: 0xf2c14e,
   drifter: 0x8fa3b8,
   uiDanger: 0xff5a5f,
+  uiDangerColorblind: 0xffffff,
   uiText: 0xf5f1e6,
 } as const;
+
+export function round1(v: number): number {
+  const r = Math.round(v * 10) / 10;
+  return Object.is(r, -0) ? 0 : r;
+}
 
 export function round3(v: number): number {
   const r = Math.round(v * 1000) / 1000;

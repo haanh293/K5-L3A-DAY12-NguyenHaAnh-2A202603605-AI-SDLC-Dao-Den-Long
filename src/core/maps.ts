@@ -60,8 +60,8 @@ function buildNight1Map(): NightMapDef {
     night: 1,
     name: 'Đêm 1 — Đảo Bến',
     introQuote:
-      'Ông Đăng dặn: "Đảo Bến là cửa ngõ biển mây. Hãy thắp lại 5 Đèn Lồng Lớn, sương đen sẽ tự lùi bước."',
-    durationS: 300,
+      'Ông Đăng dặn: "Đảo Bến là cửa ngõ biển mây. Hãy giữ ít nhất 3/5 Đèn Lồng sáng tới bình minh, và châm dầu kịp khi đèn sắp tắt!"',
+    durationS: 240,
     spawnPos: [0, 0, 0],
     spawnYaw: 0, // facing +Z
     lanterns: [
@@ -110,8 +110,8 @@ function buildNight2Map(): NightMapDef {
     night: 2,
     name: 'Đêm 2 — Đảo Cau',
     introQuote:
-      'Ông Đăng nói: "Cầu tre Đảo Cau không có lan can, lại có Gió Lạc rình cướp ánh sáng. Hãy tận dụng Bùa Gió và bục nhảy nhé Mây!"',
-    durationS: 330,
+      'Ông Đăng nói: "Cầu tre Đảo Cau không có lan can, lại có Gió Lạc rình cướp ánh sáng. Hãy giữ sáng ít nhất 4/6 đèn tới bình minh nhé Mây!"',
+    durationS: 270,
     spawnPos: [0, 0, 0],
     spawnYaw: 0,
     lanterns: [
@@ -164,8 +164,8 @@ function buildNight3Map(): NightMapDef {
     night: 3,
     name: 'Đêm 3 — Đảo Chuông',
     introQuote:
-      'Ông Đăng khẽ bảo: "Trên đỉnh Đảo Chuông gió thổi rất mạnh và Bóng Mực nhanh hơn. Thắp đủ 7 Đèn Lồng, bình minh sẽ trở về!"',
-    durationS: 360,
+      'Ông Đăng khẽ bảo: "Trên đỉnh Đảo Chuông gió thổi rất mạnh và Bóng Mực nhanh hơn. Giữ sáng tối thiểu 5/7 Đèn Lồng tới bình minh là thắng!"',
+    durationS: 300,
     spawnPos: [0, 0, -15], // Open Tier 0 ground facing +Z toward Tier 2/1 & Bell Tower
     spawnYaw: 0,
     lanterns: [

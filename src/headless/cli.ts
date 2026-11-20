@@ -26,7 +26,7 @@ class FormatError extends Error {
   }
 }
 
-const VALID_SHADE_STATES = new Set(['spawning', 'wander', 'chase', 'recoil', 'stunned']);
+const VALID_SHADE_STATES = new Set(['spawning', 'wander', 'chase', 'recoil', 'stunned', 'drain']);
 const VALID_DRIFTER_STATES = new Set(['idle', 'chase', 'flee']);
 
 function parseArgs(argv: string[]): CliArgs {
@@ -153,6 +153,7 @@ function loadAndValidateScenario(filePath: string): ScenarioConfig {
       'dash_cd_ticks',
       'pulse_cd_ticks',
       'charm_ticks',
+      'successful_lights',
     ]) {
       if (p[numKey] !== undefined && (typeof p[numKey] !== 'number' || (p[numKey] as number) < 0)) {
         throw new FormatError(`scenario.player.${numKey} must be a non-negative number`);
@@ -194,6 +195,9 @@ function loadAndValidateScenario(filePath: string): ScenarioConfig {
       const sObj = s as Record<string, unknown>;
       if (sObj.state !== undefined && (typeof sObj.state !== 'string' || !VALID_SHADE_STATES.has(sObj.state))) {
         throw new FormatError(`Invalid shade state: ${String(sObj.state)}`);
+      }
+      if (sObj.target_lantern_id !== undefined && typeof sObj.target_lantern_id !== 'string') {
+        throw new FormatError('scenario.shades[].target_lantern_id must be a string');
       }
     }
   }
@@ -239,6 +243,12 @@ function loadAndValidateScenario(filePath: string): ScenarioConfig {
       const lObj = l as Record<string, unknown>;
       if (lObj.pos !== undefined && !isVec3(lObj.pos)) {
         throw new FormatError('scenario.lanterns[].pos must be [x,y,z]');
+      }
+      if (lObj.fuel !== undefined && (typeof lObj.fuel !== 'number' || !Number.isFinite(lObj.fuel))) {
+        throw new FormatError('scenario.lanterns[].fuel must be a finite number');
+      }
+      if (lObj.ever_lit !== undefined && typeof lObj.ever_lit !== 'boolean') {
+        throw new FormatError('scenario.lanterns[].ever_lit must be a boolean');
       }
     }
   }
