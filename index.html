@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Đảo Đèn Lồng — Đêm 1: Đảo Bến</title>
+    <link rel="stylesheet" href="/src/client/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas"></canvas>
+
+      <div id="hud">
+        <div class="hud-top">
+          <div class="hud-card hud-title">
+            <span class="badge">ĐÊM 1 · ĐẢO BẾN</span>
+            <h1>Đảo Đèn Lồng</h1>
+          </div>
+
+          <div class="hud-stats">
+            <div class="stat-pill" title="Máu (Ngọn lửa)">
+              <span class="stat-label">Ngọn lửa</span>
+              <span id="hud-flames" class="stat-value flames">🔥🔥🔥</span>
+            </div>
+            <div class="stat-pill" title="Đom đóm đang mang">
+              <span class="stat-label">Đom đóm</span>
+              <span id="hud-carried" class="stat-value">0 / 5</span>
+            </div>
+            <div class="stat-pill" title="Đèn Lồng Lớn đã thắp">
+              <span class="stat-label">Đèn Lồng</span>
+              <span id="hud-lanterns" class="stat-value">0 / 5</span>
+            </div>
+            <div class="stat-pill" title="Thời gian còn lại">
+              <span class="stat-label">Bình minh</span>
+              <span id="hud-time" class="stat-value">03:00</span>
+            </div>
+            <div class="stat-pill" title="Điểm số">
+              <span class="stat-label">Điểm</span>
+              <span id="hud-score" class="stat-value">0</span>
+            </div>
+          </div>
+
+          <button id="btn-mute" class="icon-btn" title="Bật / Tắt âm thanh">🔊</button>
+        </div>
+
+        <div id="hud-toast" class="hud-toast hidden"></div>
+
+        <div class="hud-bottom">
+          <div class="controls-bar">
+            <span><kbd>WASD</kbd> / <kbd>↑↓←→</kbd> Di chuyển</span>
+            <span><kbd>Space</kbd> Nhảy</span>
+            <span><kbd>E</kbd> Nạp đèn</span>
+            <span><kbd>F</kbd> / <kbd>Shift</kbd> Tỏa sáng <em id="hud-pulse-status">(Sẵn sàng)</em></span>
+            <span><kbd>J</kbd>/<kbd>L</kbd> hoặc kéo chuột: Xoay camera</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="overlay" class="overlay hidden">
+        <div class="overlay-card">
+          <h2 id="overlay-title">Chiến thắng!</h2>
+          <p id="overlay-subtitle">Đảo Bến đã rực sáng trở lại.</p>
+          <div id="overlay-score" class="overlay-score">Điểm: 0</div>
+          <div id="overlay-details" class="overlay-details"></div>
+          <button id="btn-restart" class="primary-btn">Chơi lại (R)</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>
