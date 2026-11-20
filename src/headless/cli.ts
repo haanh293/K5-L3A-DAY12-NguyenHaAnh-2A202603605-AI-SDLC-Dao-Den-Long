@@ -4,13 +4,14 @@ import { GameSimulation, createDefaultInputState } from '../core/simulation.js';
 import type {
   InputFrame,
   InputsFile,
+  NightNumber,
   ScenarioConfig,
   TickInputState,
 } from '../core/types.js';
 
 interface CliArgs {
   seed: number;
-  night: number;
+  night: NightNumber;
   scenarioPath?: string;
   inputsPath?: string;
   ticks: number;
@@ -24,6 +25,9 @@ class FormatError extends Error {
     this.name = 'FormatError';
   }
 }
+
+const VALID_SHADE_STATES = new Set(['spawning', 'wander', 'chase', 'recoil', 'stunned']);
+const VALID_DRIFTER_STATES = new Set(['idle', 'chase', 'flee']);
 
 function parseArgs(argv: string[]): CliArgs {
   let seed: number | undefined;
@@ -47,7 +51,7 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--night':
         if (next === undefined || !/^\d+$/.test(next)) {
-          throw new Error('--night requires a positive integer');
+          throw new Error('--night requires an integer (1, 2, or 3)');
         }
         night = parseInt(next, 10);
         i++;
@@ -88,7 +92,9 @@ function parseArgs(argv: string[]): CliArgs {
 
   if (seed === undefined) throw new Error('Missing required --seed');
   if (night === undefined) throw new Error('Missing required --night');
-  if (night !== 1) throw new Error(`Unsupported --night ${night} (Phase 1 supports night 1)`);
+  if (night !== 1 && night !== 2 && night !== 3) {
+    throw new Error(`Unsupported --night ${night} (Contract v1.1 supports 1, 2, or 3)`);
+  }
   if (ticks === undefined) throw new Error('Missing required --ticks');
   if (outPath === undefined) throw new Error('Missing required --out');
 
@@ -140,20 +146,26 @@ function loadAndValidateScenario(filePath: string): ScenarioConfig {
     if (p.pos !== undefined && !isVec3(p.pos)) {
       throw new FormatError('scenario.player.pos must be [x, y, z]');
     }
-    if (p.carried !== undefined && (typeof p.carried !== 'number' || p.carried < 0)) {
-      throw new FormatError('scenario.player.carried must be a non-negative number');
-    }
-    if (p.flames !== undefined && (typeof p.flames !== 'number' || p.flames < 0)) {
-      throw new FormatError('scenario.player.flames must be a non-negative number');
+    for (const numKey of [
+      'carried',
+      'flames',
+      'invuln_ticks',
+      'dash_cd_ticks',
+      'pulse_cd_ticks',
+      'charm_ticks',
+    ]) {
+      if (p[numKey] !== undefined && (typeof p[numKey] !== 'number' || (p[numKey] as number) < 0)) {
+        throw new FormatError(`scenario.player.${numKey} must be a non-negative number`);
+      }
     }
   }
 
-  if (obj.random_motes !== undefined && typeof obj.random_motes !== 'boolean') {
-    throw new FormatError('scenario.random_motes must be a boolean');
+  for (const boolKey of ['random_motes', 'random_shades', 'random_drifters', 'wind_enabled']) {
+    if (obj[boolKey] !== undefined && typeof obj[boolKey] !== 'boolean') {
+      throw new FormatError(`scenario.${boolKey} must be a boolean`);
+    }
   }
-  if (obj.random_shades !== undefined && typeof obj.random_shades !== 'boolean') {
-    throw new FormatError('scenario.random_shades must be a boolean');
-  }
+
   if (obj.time_left_s !== undefined && (typeof obj.time_left_s !== 'number' || obj.time_left_s < 0)) {
     throw new FormatError('scenario.time_left_s must be a non-negative number');
   }
@@ -177,7 +189,41 @@ function loadAndValidateScenario(filePath: string): ScenarioConfig {
     }
     for (const s of obj.shades) {
       if (typeof s !== 'object' || s === null || !isVec3((s as Record<string, unknown>).pos)) {
-        throw new FormatError('Each shade in scenario.shades must be an object with pos:[x,y,z]');
+        throw new FormatError('Each shade in scenario.shades must have pos:[x,y,z]');
+      }
+      const sObj = s as Record<string, unknown>;
+      if (sObj.state !== undefined && (typeof sObj.state !== 'string' || !VALID_SHADE_STATES.has(sObj.state))) {
+        throw new FormatError(`Invalid shade state: ${String(sObj.state)}`);
+      }
+    }
+  }
+
+  if (obj.drifters !== undefined) {
+    if (!Array.isArray(obj.drifters)) {
+      throw new FormatError('scenario.drifters must be an array');
+    }
+    for (const d of obj.drifters) {
+      if (typeof d !== 'object' || d === null || !isVec3((d as Record<string, unknown>).pos)) {
+        throw new FormatError('Each drifter in scenario.drifters must have pos:[x,y,z]');
+      }
+      const dObj = d as Record<string, unknown>;
+      if (dObj.state !== undefined && (typeof dObj.state !== 'string' || !VALID_DRIFTER_STATES.has(dObj.state))) {
+        throw new FormatError(`Invalid drifter state: ${String(dObj.state)}`);
+      }
+    }
+  }
+
+  if (obj.charms !== undefined) {
+    if (!Array.isArray(obj.charms)) {
+      throw new FormatError('scenario.charms must be an array');
+    }
+    for (const c of obj.charms) {
+      if (typeof c !== 'object' || c === null) {
+        throw new FormatError('Each charm in scenario.charms must be an object');
+      }
+      const cObj = c as Record<string, unknown>;
+      if (cObj.pos !== undefined && !isVec3(cObj.pos)) {
+        throw new FormatError('scenario.charms[].pos must be [x,y,z]');
       }
     }
   }
@@ -253,10 +299,13 @@ function loadAndValidateInputs(filePath: string): InputFrame[] {
         throw new FormatError(`inputs.frames[${i}].move must be [x, z] numbers`);
       }
     }
-    if (frame.cam_yaw_deg !== undefined && (typeof frame.cam_yaw_deg !== 'number' || !Number.isFinite(frame.cam_yaw_deg))) {
+    if (
+      frame.cam_yaw_deg !== undefined &&
+      (typeof frame.cam_yaw_deg !== 'number' || !Number.isFinite(frame.cam_yaw_deg))
+    ) {
       throw new FormatError(`inputs.frames[${i}].cam_yaw_deg must be a finite number`);
     }
-    for (const key of ['jump', 'interact', 'pulse', 'dash'] as const) {
+    for (const key of ['jump', 'interact', 'pulse', 'dash', 'pause'] as const) {
       if (frame[key] !== undefined && typeof frame[key] !== 'boolean') {
         throw new FormatError(`inputs.frames[${i}].${key} must be a boolean`);
       }
@@ -287,7 +336,7 @@ function main(): void {
     let frameIdx = 0;
 
     for (let k = 0; k < args.ticks; k++) {
-      if (sim.state !== 'playing') break;
+      if (sim.state === 'won' || sim.state === 'lost') break;
 
       while (frameIdx < frames.length && frames[frameIdx].tick === k) {
         const f = frames[frameIdx];
@@ -297,6 +346,7 @@ function main(): void {
         if (f.interact !== undefined) currentInput.interact = f.interact;
         if (f.pulse !== undefined) currentInput.pulse = f.pulse;
         if (f.dash !== undefined) currentInput.dash = f.dash;
+        if (f.pause !== undefined) currentInput.pause = f.pause;
         frameIdx++;
       }
 
