@@ -15,12 +15,6 @@ interface LanternVisual {
   fuelFillMat: THREE.MeshBasicMaterial;
 }
 
-interface ShadeVisual {
-  group: THREE.Group;
-  bodyMat: THREE.MeshStandardMaterial;
-  eyeMat: THREE.MeshBasicMaterial;
-}
-
 interface PulseWave {
   mesh: THREE.Mesh;
   age: number;
@@ -28,10 +22,14 @@ interface PulseWave {
   maxRadius: number;
 }
 
+const MAX_SHADE_INSTANCES = 256;
+const MAX_MOTE_INSTANCES = 160;
+
 export class LanternIslandScene {
   readonly renderer: THREE.WebGLRenderer;
   readonly scene: THREE.Scene;
   readonly camera: THREE.PerspectiveCamera;
+  readonly benchMode: boolean;
 
   private ambientLight: THREE.AmbientLight;
   private hemiLight: THREE.HemisphereLight;
@@ -46,19 +44,44 @@ export class LanternIslandScene {
   private orbitOrbs: THREE.Mesh[] = [];
 
   private lanternVisuals = new Map<string, LanternVisual>();
-  private moteMeshes = new Map<string, THREE.Group>();
-  private shadeVisuals = new Map<string, ShadeVisual>();
   private drifterMeshes = new Map<string, THREE.Group>();
   private charmMeshes = new Map<string, THREE.Group>();
   private pulseWaves: PulseWave[] = [];
   private windLeaves: THREE.Points;
   private stars: THREE.Points;
-  private visualTime = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
+  // High-performance InstancedMesh pools for Shades (200+ in bench) & Motes (100+ in bench)
+  private shadeBodyInst: THREE.InstancedMesh;
+  private shadeBodyMat: THREE.MeshStandardMaterial;
+  private shadeEyeInst: THREE.InstancedMesh;
+  private shadeEyeMat: THREE.MeshBasicMaterial;
+  private moteCoreInst: THREE.InstancedMesh;
+  private moteHaloInst: THREE.InstancedMesh;
+
+  private tmpMatrix = new THREE.Matrix4();
+  private tmpPos = new THREE.Vector3();
+  private tmpQuat = new THREE.Quaternion();
+  private tmpScale = new THREE.Vector3();
+  private tmpEuler = new THREE.Euler();
+  private tmpColor = new THREE.Color();
+  private tmpCamTarget = new THREE.Vector3();
+
+  private visualTime = 0;
+  private cameraShakeTimer = 0;
+
+  constructor(canvas: HTMLCanvasElement, options?: { benchMode?: boolean }) {
+    this.benchMode = Boolean(options?.benchMode);
+
+    this.renderer = new THREE.WebGLRenderer({
+      canvas,
+      antialias: true,
+      powerPreference: 'high-performance',
+    });
+    this.renderer.setPixelRatio(this.benchMode ? 1 : Math.min(window.devicePixelRatio, 2));
+    this.renderer.setSize(
+      this.benchMode ? 1280 : window.innerWidth,
+      this.benchMode ? 720 : window.innerHeight
+    );
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -71,12 +94,11 @@ export class LanternIslandScene {
 
     this.camera = new THREE.PerspectiveCamera(
       55,
-      window.innerWidth / window.innerHeight,
+      this.benchMode ? 1280 / 720 : window.innerWidth / window.innerHeight,
       0.1,
       300
     );
 
-    // Ambient intensity follows exact formula: 0.15 + 0.55 * (lit / total)
     this.ambientLight = new THREE.AmbientLight(0xd8e0ff, 0.15);
     this.scene.add(this.ambientLight);
 
@@ -100,12 +122,81 @@ export class LanternIslandScene {
     this.windLeaves = this.buildWindLeaves();
     this.scene.add(this.worldGroup);
 
+    // Instanced Shades (bodies + eyes)
+    this.shadeBodyMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: PALETTE.shadeRim,
+      emissiveIntensity: 0.65,
+      roughness: 0.45,
+    });
+    this.shadeBodyInst = new THREE.InstancedMesh(
+      new THREE.DodecahedronGeometry(0.68, 1),
+      this.shadeBodyMat,
+      MAX_SHADE_INSTANCES
+    );
+    this.shadeBodyInst.count = 0;
+    this.shadeBodyInst.frustumCulled = false;
+    this.scene.add(this.shadeBodyInst);
+
+    this.shadeEyeMat = new THREE.MeshBasicMaterial({ color: PALETTE.shadeRim });
+    this.shadeEyeInst = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.12, 6, 6),
+      this.shadeEyeMat,
+      MAX_SHADE_INSTANCES * 2
+    );
+    this.shadeEyeInst.count = 0;
+    this.shadeEyeInst.frustumCulled = false;
+    this.scene.add(this.shadeEyeInst);
+
+    // Instanced Motes (cores + halos)
+    this.moteCoreInst = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.2, 8, 8),
+      new THREE.MeshBasicMaterial({ color: PALETTE.moteCore }),
+      MAX_MOTE_INSTANCES
+    );
+    this.moteCoreInst.count = 0;
+    this.moteCoreInst.frustumCulled = false;
+    this.scene.add(this.moteCoreInst);
+
+    this.moteHaloInst = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.36, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: PALETTE.moteHalo,
+        transparent: true,
+        opacity: 0.35,
+      }),
+      MAX_MOTE_INSTANCES
+    );
+    this.moteHaloInst.count = 0;
+    this.moteHaloInst.frustumCulled = false;
+    this.scene.add(this.moteHaloInst);
+
     const { group, lanternLight } = this.buildPlayerMay();
     this.playerGroup = group;
     this.playerLanternLight = lanternLight;
     this.scene.add(this.playerGroup);
 
-    window.addEventListener('resize', this.handleResize);
+    if (!this.benchMode) {
+      window.addEventListener('resize', this.handleResize);
+    }
+  }
+
+  getRendererInfo(): string {
+    try {
+      const gl = this.renderer.getContext();
+      const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+      if (dbg) {
+        const gpu = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL);
+        if (gpu) return `Three.js 0.170.0 / WebGL2 (${String(gpu)})`;
+      }
+    } catch {
+      // ignore
+    }
+    return 'Three.js 0.170.0 / WebGL2';
+  }
+
+  triggerCameraShake(duration = 0.25): void {
+    this.cameraShakeTimer = Math.max(this.cameraShakeTimer, duration);
   }
 
   private handleResize = (): void => {
@@ -126,7 +217,7 @@ export class LanternIslandScene {
     cloudPlane.position.y = -11.5;
     this.scene.add(cloudPlane);
 
-    const starCount = 450;
+    const starCount = 400;
     const positions = new Float32Array(starCount * 3);
     for (let i = 0; i < starCount; i++) {
       const theta = ((i * 137.5) % 360) * (Math.PI / 180);
@@ -174,10 +265,6 @@ export class LanternIslandScene {
   private clearDynamicEntities(): void {
     for (const v of this.lanternVisuals.values()) this.scene.remove(v.group);
     this.lanternVisuals.clear();
-    for (const m of this.moteMeshes.values()) this.scene.remove(m);
-    this.moteMeshes.clear();
-    for (const s of this.shadeVisuals.values()) this.scene.remove(s.group);
-    this.shadeVisuals.clear();
     for (const d of this.drifterMeshes.values()) this.scene.remove(d);
     this.drifterMeshes.clear();
     for (const c of this.charmMeshes.values()) this.scene.remove(c);
@@ -201,7 +288,6 @@ export class LanternIslandScene {
     });
 
     if (night === 1) {
-      // Đảo Bến: r=40
       const disc = new THREE.Mesh(new THREE.CylinderGeometry(40, 37, 4, 56), grassMat);
       disc.position.y = -2;
       disc.receiveShadow = true;
@@ -212,16 +298,17 @@ export class LanternIslandScene {
       rim.position.y = 0.02;
       this.worldGroup.add(rim);
 
-      // Wooden dock & boat landmark
-      const dock = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.3, 8), woodMat);
-      dock.position.set(0, 0.05, -42.5);
-      this.worldGroup.add(dock);
-      const boat = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.7, 3.8), woodMat);
-      boat.position.set(4.0, -0.4, -44.5);
-      boat.rotation.y = 0.3;
-      this.worldGroup.add(boat);
+      // Creative landmarks disabled in benchMode per Ticket-04 standard bench scene rule
+      if (!this.benchMode) {
+        const dock = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.3, 8), woodMat);
+        dock.position.set(0, 0.05, -42.5);
+        this.worldGroup.add(dock);
+        const boat = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.7, 3.8), woodMat);
+        boat.position.set(4.0, -0.4, -44.5);
+        boat.rotation.y = 0.3;
+        this.worldGroup.add(boat);
+      }
     } else if (night === 2) {
-      // Đảo Cau: 2 islands r=28 at (0,0,0) and (70,0,0) + bamboo bridge x in [26,44], z in [-2,2]
       for (const cx of [0, 70]) {
         const disc = new THREE.Mesh(new THREE.CylinderGeometry(28, 25, 4, 48), grassMat);
         disc.position.set(cx, -2, 0);
@@ -239,7 +326,6 @@ export class LanternIslandScene {
       bridge.receiveShadow = true;
       this.worldGroup.add(bridge);
 
-      // Jump pads
       for (const [px, py, pz] of [
         [20, 0, 18],
         [50, 0, -18],
@@ -249,7 +335,6 @@ export class LanternIslandScene {
         this.worldGroup.add(pad);
       }
     } else {
-      // Đảo Chuông: r=45, Tier 0 (Y=0), Tier 1 annulus (r 12..24, z>0, Y=3), Tier 2 (r=8, Y=6)
       const tier0 = new THREE.Mesh(new THREE.CylinderGeometry(45, 42, 4, 60), grassMat);
       tier0.position.y = -2;
       tier0.receiveShadow = true;
@@ -260,28 +345,25 @@ export class LanternIslandScene {
       rim.position.y = 0.02;
       this.worldGroup.add(rim);
 
-      // Tier 1 half-annulus extrusion (z > 0, r 12..24, height 3)
       const shape = new THREE.Shape();
       shape.absarc(0, 0, 24, 0, Math.PI, false);
       shape.lineTo(-12, 0);
       shape.absarc(0, 0, 12, Math.PI, 0, true);
       shape.closePath();
       const tier1Geo = new THREE.ExtrudeGeometry(shape, { depth: 3, bevelEnabled: false });
-      tier1Geo.rotateX(Math.PI / 2); // Maps shape +Y to world +Z, extrudes down from Y=3 to Y=0
+      tier1Geo.rotateX(Math.PI / 2);
       const tier1 = new THREE.Mesh(tier1Geo, grassMat);
       tier1.position.y = 3;
       tier1.receiveShadow = true;
       tier1.castShadow = true;
       this.worldGroup.add(tier1);
 
-      // Tier 2 center disc r=8, Y=6
       const tier2 = new THREE.Mesh(new THREE.CylinderGeometry(8, 8, 6, 36), grassMat);
       tier2.position.y = 3;
       tier2.receiveShadow = true;
       tier2.castShadow = true;
       this.worldGroup.add(tier2);
 
-      // 2 Straight Ramps at 30 deg & 150 deg (r=30 Y=0 -> r=24 Y=3, width 3m)
       const rampLen = Math.hypot(6, 3);
       const rampPitch = Math.atan2(3, 6);
       for (const deg of [30, 150]) {
@@ -289,22 +371,19 @@ export class LanternIslandScene {
         const midR = 27;
         const rampGroup = new THREE.Group();
         rampGroup.position.set(Math.cos(rad) * midR, 1.5, Math.sin(rad) * midR);
-        // Align local +X along radial outward (cos(rad), sin(rad))
         rampGroup.rotation.y = -rad;
         const rampMesh = new THREE.Mesh(new THREE.BoxGeometry(rampLen, 0.3, 3.0), woodMat);
-        rampMesh.rotation.z = -rampPitch; // -X (inner r=24) goes up (+Y), +X (outer r=30) goes down
+        rampMesh.rotation.z = -rampPitch;
         rampMesh.receiveShadow = true;
         rampMesh.castShadow = true;
         rampGroup.add(rampMesh);
         this.worldGroup.add(rampGroup);
       }
 
-      // Jump pad on Tier 1 at (0, 3, 13)
       const pad = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.15, 0.2, 20), padMat);
       pad.position.set(0, 3.1, 13);
       this.worldGroup.add(pad);
 
-      // Bell Tower at center of Tier 2 (r=2, height 8m from Y=6 to Y=14)
       const tower = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 2.0, 8.0, 20), woodMat);
       tower.position.set(0, 10, 0);
       tower.castShadow = true;
@@ -349,7 +428,6 @@ export class LanternIslandScene {
     head.position.y = 1.28;
     group.add(head);
 
-    // Nón lá + hanging lantern
     const hat = new THREE.Mesh(
       new THREE.ConeGeometry(0.68, 0.42, 20),
       new THREE.MeshStandardMaterial({
@@ -418,7 +496,6 @@ export class LanternIslandScene {
     core.position.y = 3.5;
     group.add(core);
 
-    // Non-color distinction for unlit lanterns: dark torn paper seams
     const tearMarks = new THREE.Group();
     tearMarks.position.y = 3.5;
     const tearMat = new THREE.MeshBasicMaterial({ color: 0x1a1520 });
@@ -439,7 +516,6 @@ export class LanternIslandScene {
     roof.position.y = 4.25;
     group.add(roof);
 
-    // Floating 3D fuel bar above lit lanterns
     const fuelBarGroup = new THREE.Group();
     fuelBarGroup.position.y = 5.1;
     const fuelBg = new THREE.Mesh(
@@ -486,32 +562,6 @@ export class LanternIslandScene {
       fuelFillMat,
     };
     this.lanternVisuals.set(id, vis);
-    return vis;
-  }
-
-  private createShadeVisual(id: string): ShadeVisual {
-    const group = new THREE.Group();
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: PALETTE.shadeBody,
-      emissive: PALETTE.shadeRim,
-      emissiveIntensity: 0.65,
-      roughness: 0.45,
-    });
-    const body = new THREE.Mesh(new THREE.DodecahedronGeometry(0.68, 1), bodyMat);
-    body.castShadow = true;
-    group.add(body);
-
-    const eyeMat = new THREE.MeshBasicMaterial({ color: PALETTE.shadeRim });
-    const leftEye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), eyeMat);
-    leftEye.position.set(-0.22, 0.14, 0.56);
-    group.add(leftEye);
-    const rightEye = new THREE.Mesh(new THREE.SphereGeometry(0.12, 8, 8), eyeMat);
-    rightEye.position.set(0.22, 0.14, 0.56);
-    group.add(rightEye);
-
-    this.scene.add(group);
-    const vis = { group, bodyMat, eyeMat };
-    this.shadeVisuals.set(id, vis);
     return vis;
   }
 
@@ -572,9 +622,8 @@ export class LanternIslandScene {
     this.pulseWaves.push({ mesh, age: 0, maxAge: 0.5, maxRadius });
   }
 
-  /** Projects a 3D world point to normalized screen coordinates for off-screen indicator. */
   projectToScreen(pos: Vec3): { x: number; y: number; inFront: boolean; onScreen: boolean } {
-    const v = new THREE.Vector3(pos[0], pos[1] + 2.5, pos[2]);
+    const v = new THREE.Vector3(pos[0], pos[1] + 2.0, pos[2]);
     v.project(this.camera);
     const inFront = v.z < 1;
     const onScreen = inFront && Math.abs(v.x) <= 0.92 && Math.abs(v.y) <= 0.9;
@@ -586,7 +635,12 @@ export class LanternIslandScene {
     };
   }
 
-  sync(sim: GameSimulation, camYawDeg: number, dt: number, colorblind = false): void {
+  private syncEntitiesCommon(
+    sim: GameSimulation,
+    dt: number,
+    colorblind: boolean,
+    reducedMotion: boolean
+  ): void {
     if (this.currentNight !== sim.night) {
       this.rebuildWorldForNight(sim.night);
     }
@@ -600,11 +654,13 @@ export class LanternIslandScene {
     this.playerGroup.rotation.y = sim.player.facingYaw;
     const blinkHidden =
       sim.player.respawnTicks > 0 ||
-      (sim.player.invulnTicks > 0 && Math.floor(this.visualTime * 16) % 2 === 0);
+      (!reducedMotion &&
+        sim.player.invulnTicks > 0 &&
+        Math.floor(this.visualTime * 16) % 2 === 0);
     this.playerGroup.visible = !blinkHidden;
     this.playerLanternLight.intensity = 2.0 + Math.sin(this.visualTime * 5) * 0.2;
 
-    const visualOrbs = Math.min(this.orbitOrbs.length, sim.player.carried);
+    const visualOrbs = this.benchMode ? 0 : Math.min(this.orbitOrbs.length, sim.player.carried);
     for (let i = 0; i < this.orbitOrbs.length; i++) {
       const orb = this.orbitOrbs[i];
       if (i < visualOrbs) {
@@ -620,7 +676,7 @@ export class LanternIslandScene {
       }
     }
 
-    // Lanterns: fuel bar, 1Hz blink when fuel < 30, 20% squash + torn seams when unlit
+    // Lanterns
     let litCount = 0;
     const blink1Hz = Math.sin(this.visualTime * Math.PI * 2) >= 0;
     for (const l of sim.lanterns) {
@@ -648,7 +704,7 @@ export class LanternIslandScene {
             colorblind ? PALETTE.uiDangerColorblind : PALETTE.uiDanger
           );
           vis.fuelFill.visible = blink1Hz;
-          (vis.ring.material as THREE.MeshBasicMaterial).opacity = 0; // Safe zone lost < 30
+          (vis.ring.material as THREE.MeshBasicMaterial).opacity = 0;
         } else {
           vis.coreMat.color.setHex(PALETTE.lanternCore);
           vis.coreMat.emissive.setHex(PALETTE.lanternLit);
@@ -661,7 +717,6 @@ export class LanternIslandScene {
       } else {
         const cost = l.everLit ? sim.tuning.relight_cost : sim.tuning.lantern_cost;
         const prog = l.deposited / Math.max(1, cost);
-        // Non-color distinction: unlit lantern squashed 20% + visible torn paper seams
         vis.core.scale.set(1, 0.8, 1);
         vis.tearMarks.visible = true;
         vis.fuelBarGroup.visible = false;
@@ -677,78 +732,89 @@ export class LanternIslandScene {
     this.ambientLight.intensity = 0.15 + 0.55 * ratio;
     (this.stars.material as THREE.PointsMaterial).opacity = 0.55 + ratio * 0.45;
 
-    // Motes
-    const activeMoteIds = new Set(sim.motes.map((m) => m.id));
-    for (const [id, mesh] of this.moteMeshes) {
-      if (!activeMoteIds.has(id)) {
-        this.scene.remove(mesh);
-        this.moteMeshes.delete(id);
-      }
-    }
-    for (const m of sim.motes) {
-      let g = this.moteMeshes.get(m.id);
-      if (!g) {
-        g = new THREE.Group();
-        const core = new THREE.Mesh(
-          new THREE.SphereGeometry(0.2, 8, 8),
-          new THREE.MeshBasicMaterial({ color: PALETTE.moteCore })
-        );
-        const halo = new THREE.Mesh(
-          new THREE.SphereGeometry(0.36, 8, 8),
-          new THREE.MeshBasicMaterial({
-            color: PALETTE.moteHalo,
-            transparent: true,
-            opacity: 0.35,
-          })
-        );
-        g.add(core, halo);
-        this.scene.add(g);
-        this.moteMeshes.set(m.id, g);
-      }
+    // Instanced Motes (1 draw call for cores + 1 for halos)
+    const moteCount = Math.min(sim.motes.length, MAX_MOTE_INSTANCES);
+    this.moteCoreInst.count = moteCount;
+    this.moteHaloInst.count = moteCount;
+    this.tmpQuat.identity();
+    this.tmpScale.set(1, 1, 1);
+    for (let i = 0; i < moteCount; i++) {
+      const m = sim.motes[i];
       const bob = 0.65 + Math.sin(this.visualTime * 3.2 + m.pos[0] + m.pos[2]) * 0.2;
-      g.position.set(m.pos[0], m.pos[1] + bob, m.pos[2]);
+      this.tmpPos.set(m.pos[0], m.pos[1] + bob, m.pos[2]);
+      this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+      this.moteCoreInst.setMatrixAt(i, this.tmpMatrix);
+      this.moteHaloInst.setMatrixAt(i, this.tmpMatrix);
     }
+    this.moteCoreInst.instanceMatrix.needsUpdate = true;
+    this.moteHaloInst.instanceMatrix.needsUpdate = true;
 
-    // Shades (Colorblind mode: rim & eyes #00B3FF instead of #7A3CFF)
+    // Instanced Shades (1 draw call for bodies + 1 for eyes)
     const rimHex = colorblind ? PALETTE.shadeRimColorblind : PALETTE.shadeRim;
-    const activeShadeIds = new Set(sim.shades.map((s) => s.id));
-    for (const [id, vis] of this.shadeVisuals) {
-      if (!activeShadeIds.has(id)) {
-        this.scene.remove(vis.group);
-        this.shadeVisuals.delete(id);
-      }
-    }
-    for (const s of sim.shades) {
-      let vis = this.shadeVisuals.get(s.id);
-      if (!vis) vis = this.createShadeVisual(s.id);
-      vis.eyeMat.color.setHex(rimHex);
-      vis.group.position.set(
-        s.pos[0],
-        s.pos[1] + Math.sin(this.visualTime * 4 + s.pos[0]) * 0.12,
-        s.pos[2]
-      );
-      if (s.state === 'stunned') {
-        vis.bodyMat.color.setHex(PALETTE.shadeStunned);
-        vis.bodyMat.emissive.setHex(PALETTE.lanternCore);
-        vis.bodyMat.emissiveIntensity = 0.9;
-        vis.group.rotation.y += dt * 7;
-        vis.group.scale.setScalar(0.84);
-      } else {
-        vis.bodyMat.color.setHex(PALETTE.shadeBody);
-        vis.bodyMat.emissive.setHex(rimHex);
-        vis.bodyMat.emissiveIntensity =
-          s.state === 'drain' ? 1.5 : s.state === 'spawning' ? 1.2 : 0.65;
-        vis.group.scale.setScalar(
-          s.state === 'spawning' ? 0.6 : s.state === 'drain' ? 1.15 : 1.0
-        );
-        vis.group.rotation.y = Math.atan2(
-          sim.player.pos[0] - s.pos[0],
-          sim.player.pos[2] - s.pos[2]
-        );
-      }
-    }
+    this.shadeBodyMat.emissive.setHex(rimHex);
+    this.shadeEyeMat.color.setHex(rimHex);
 
-    // Drifters (Gió Lạc)
+    const shadeCount = Math.min(sim.shades.length, MAX_SHADE_INSTANCES);
+    this.shadeBodyInst.count = shadeCount;
+    this.shadeEyeInst.count = shadeCount * 2;
+
+    for (let i = 0; i < shadeCount; i++) {
+      const s = sim.shades[i];
+      const hover = Math.sin(this.visualTime * 4 + s.pos[0]) * 0.12;
+      const sy = s.pos[1] + hover;
+      const yaw =
+        s.state === 'stunned'
+          ? this.visualTime * 7
+          : Math.atan2(sim.player.pos[0] - s.pos[0], sim.player.pos[2] - s.pos[2]);
+      const sc =
+        s.state === 'stunned'
+          ? 0.84
+          : s.state === 'spawning'
+            ? 0.6
+            : s.state === 'drain'
+              ? 1.15
+              : 1.0;
+
+      this.tmpPos.set(s.pos[0], sy, s.pos[2]);
+      this.tmpEuler.set(0, yaw, 0);
+      this.tmpQuat.setFromEuler(this.tmpEuler);
+      this.tmpScale.set(sc, sc, sc);
+      this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+      this.shadeBodyInst.setMatrixAt(i, this.tmpMatrix);
+
+      this.tmpColor.setHex(s.state === 'stunned' ? PALETTE.shadeStunned : PALETTE.shadeBody);
+      this.shadeBodyInst.setColorAt(i, this.tmpColor);
+
+      // Left & right eyes transformed by yaw
+      const sinY = Math.sin(yaw);
+      const cosY = Math.cos(yaw);
+      const eyeFwd = 0.56 * sc;
+      const eyeSide = 0.22 * sc;
+      const eyeY = sy + 0.14 * sc;
+      this.tmpScale.set(sc, sc, sc);
+      this.tmpQuat.identity();
+
+      this.tmpPos.set(
+        s.pos[0] + sinY * eyeFwd - cosY * eyeSide,
+        eyeY,
+        s.pos[2] + cosY * eyeFwd + sinY * eyeSide
+      );
+      this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+      this.shadeEyeInst.setMatrixAt(i * 2, this.tmpMatrix);
+
+      this.tmpPos.set(
+        s.pos[0] + sinY * eyeFwd + cosY * eyeSide,
+        eyeY,
+        s.pos[2] + cosY * eyeFwd - sinY * eyeSide
+      );
+      this.tmpMatrix.compose(this.tmpPos, this.tmpQuat, this.tmpScale);
+      this.shadeEyeInst.setMatrixAt(i * 2 + 1, this.tmpMatrix);
+    }
+    this.shadeBodyInst.instanceMatrix.needsUpdate = true;
+    if (this.shadeBodyInst.instanceColor) this.shadeBodyInst.instanceColor.needsUpdate = true;
+    this.shadeEyeInst.instanceMatrix.needsUpdate = true;
+
+    // Drifters
     const activeDrifterIds = new Set(sim.drifters.map((d) => d.id));
     for (const [id, g] of this.drifterMeshes) {
       if (!activeDrifterIds.has(id)) {
@@ -763,7 +829,7 @@ export class LanternIslandScene {
       g.rotation.y = this.visualTime * 3;
     }
 
-    // Charms (Bùa Gió)
+    // Charms
     const activeCharmIds = new Set(sim.charms.map((c) => c.id));
     for (const [id, g] of this.charmMeshes) {
       if (!activeCharmIds.has(id)) {
@@ -779,8 +845,8 @@ export class LanternIslandScene {
       g.rotation.y = this.visualTime * 1.8;
     }
 
-    // Wind leaves particles (Night 3 warning & gust)
-    const showWind = sim.wind.active || sim.wind.warning;
+    // Wind leaves
+    const showWind = !this.benchMode && (sim.wind.active || sim.wind.warning);
     this.windLeaves.visible = showWind;
     if (showWind && sim.state !== 'paused') {
       const wRad = (sim.wind.dirDeg * Math.PI) / 180;
@@ -813,19 +879,51 @@ export class LanternIslandScene {
         (pw.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - t) * 0.85;
       }
     }
+  }
 
-    // Camera follow
+  sync(
+    sim: GameSimulation,
+    camYawDeg: number,
+    dt: number,
+    colorblind = false,
+    reducedMotion = false
+  ): void {
+    this.syncEntitiesCommon(sim, dt, colorblind, reducedMotion);
+
     const theta = (camYawDeg * Math.PI) / 180;
     const camDist = 12.5;
     const camHeight = 6.8;
-    const targetCam = new THREE.Vector3(
+    this.tmpCamTarget.set(
       sim.player.pos[0] - Math.sin(theta) * camDist,
       sim.player.pos[1] + camHeight,
       sim.player.pos[2] - Math.cos(theta) * camDist
     );
-    this.camera.position.lerp(targetCam, Math.min(1, dt * 10));
-    this.camera.lookAt(sim.player.pos[0], sim.player.pos[1] + 1.4, sim.player.pos[2]);
 
+    if (this.cameraShakeTimer > 0) {
+      this.cameraShakeTimer = Math.max(0, this.cameraShakeTimer - dt);
+      if (!reducedMotion) {
+        this.tmpCamTarget.x += Math.sin(this.visualTime * 55) * 0.35;
+        this.tmpCamTarget.y += Math.cos(this.visualTime * 62) * 0.25;
+      }
+    }
+
+    this.camera.position.lerp(this.tmpCamTarget, Math.min(1, dt * 10));
+    this.camera.lookAt(sim.player.pos[0], sim.player.pos[1] + 1.4, sim.player.pos[2]);
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * Standard Benchmark Scene render: camera orbits (0,0,0) at radius 30m, Y=15m,
+   * starting at 0 deg (30,15,0), rotating CCW (15s per revolution).
+   */
+  syncBench(sim: GameSimulation, orbitAngleRad: number, dt: number): void {
+    this.syncEntitiesCommon(sim, dt, false, false);
+    this.camera.position.set(
+      Math.cos(orbitAngleRad) * 30,
+      15,
+      Math.sin(orbitAngleRad) * 30
+    );
+    this.camera.lookAt(0, 0, 0);
     this.renderer.render(this.scene, this.camera);
   }
 }
