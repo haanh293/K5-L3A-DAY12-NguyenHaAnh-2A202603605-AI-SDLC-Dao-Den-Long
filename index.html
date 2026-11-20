@@ -3,66 +3,179 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Đảo Đèn Lồng — Đêm 1: Đảo Bến</title>
+    <title>Đảo Đèn Lồng — Ba Hòn Đảo</title>
     <link rel="stylesheet" href="/src/client/style.css" />
   </head>
   <body>
     <div id="app">
       <canvas id="game-canvas"></canvas>
 
-      <div id="hud">
+      <!-- Off-screen arrow pointing to nearest unlit lantern -->
+      <div id="lantern-arrow" class="lantern-arrow hidden">
+        <span class="arrow-icon">➤</span>
+        <span id="lantern-arrow-dist" class="arrow-dist">25m</span>
+      </div>
+
+      <!-- In-game HUD -->
+      <div id="hud" class="hidden">
         <div class="hud-top">
-          <div class="hud-card hud-title">
-            <span class="badge">ĐÊM 1 · ĐẢO BẾN</span>
-            <h1>Đảo Đèn Lồng</h1>
+          <!-- Top-left: Flames -->
+          <div class="hud-panel hud-flames-panel">
+            <span class="hud-label">Ngọn Lửa</span>
+            <div id="hud-flames" class="flames-row">🔥🔥🔥</div>
+            <div id="hud-night-name" class="night-tag">Đêm 1 · Đảo Bến</div>
           </div>
 
-          <div class="hud-stats">
-            <div class="stat-pill" title="Máu (Ngọn lửa)">
-              <span class="stat-label">Ngọn lửa</span>
-              <span id="hud-flames" class="stat-value flames">🔥🔥🔥</span>
+          <!-- Top-center: Clock mm:ss + Wind alert -->
+          <div class="hud-center-col">
+            <div id="hud-clock-panel" class="hud-panel hud-clock-panel">
+              <span class="hud-label">Bình minh</span>
+              <div id="hud-time" class="clock-val">05:00</div>
             </div>
-            <div class="stat-pill" title="Đom đóm đang mang">
-              <span class="stat-label">Đom đóm</span>
-              <span id="hud-carried" class="stat-value">0 / 5</span>
-            </div>
-            <div class="stat-pill" title="Đèn Lồng Lớn đã thắp">
-              <span class="stat-label">Đèn Lồng</span>
-              <span id="hud-lanterns" class="stat-value">0 / 5</span>
-            </div>
-            <div class="stat-pill" title="Thời gian còn lại">
-              <span class="stat-label">Bình minh</span>
-              <span id="hud-time" class="stat-value">03:00</span>
-            </div>
-            <div class="stat-pill" title="Điểm số">
-              <span class="stat-label">Điểm</span>
-              <span id="hud-score" class="stat-value">0</span>
-            </div>
+            <div id="hud-wind-alert" class="wind-alert hidden">🍃 Gió mạnh sắp nổi!</div>
           </div>
 
-          <button id="btn-mute" class="icon-btn" title="Bật / Tắt âm thanh">🔊</button>
+          <!-- Top-right: Lanterns k/n + Score + Pause/Mute -->
+          <div class="hud-right-col">
+            <div class="hud-panel hud-score-panel">
+              <div class="metric-row">
+                <span class="hud-label">Đèn Lồng</span>
+                <span id="hud-lanterns" class="gold-val">0 / 5</span>
+              </div>
+              <div class="metric-row">
+                <span class="hud-label">Điểm</span>
+                <span id="hud-score" class="gold-val">0</span>
+              </div>
+              <div id="hud-fps" class="fps-tag">60 FPS</div>
+            </div>
+            <div class="hud-quick-btns">
+              <button id="btn-mute" class="icon-btn" title="Bật / Tắt âm thanh">🔊</button>
+              <button id="btn-pause" class="icon-btn" title="Tạm dừng (Esc / P)">⏸</button>
+            </div>
+          </div>
         </div>
 
-        <div id="hud-toast" class="hud-toast hidden"></div>
+        <div class="hud-mid">
+          <div id="hud-toast" class="hud-toast hidden"></div>
+          <div id="hud-interact-prompt" class="interact-prompt hidden">
+            E — Nạp ánh sáng (0/10)
+          </div>
+        </div>
 
         <div class="hud-bottom">
-          <div class="controls-bar">
-            <span><kbd>WASD</kbd> / <kbd>↑↓←→</kbd> Di chuyển</span>
-            <span><kbd>Space</kbd> Nhảy</span>
-            <span><kbd>E</kbd> Nạp đèn</span>
-            <span><kbd>F</kbd> / <kbd>Shift</kbd> Tỏa sáng <em id="hud-pulse-status">(Sẵn sàng)</em></span>
-            <span><kbd>J</kbd>/<kbd>L</kbd> hoặc kéo chuột: Xoay camera</span>
+          <!-- Bottom-left: Quick controls hint -->
+          <div class="controls-mini">
+            <span><kbd>WASD</kbd> Đi · <kbd>Space</kbd> Nhảy · <kbd>Shift</kbd> Lướt</span>
+            <span><kbd>E</kbd> Nạp · <kbd>F</kbd> Tỏa Sáng · <kbd>Esc/P</kbd> Tạm dừng</span>
+          </div>
+
+          <!-- Bottom-center: 10-slot Firefly bar + Wind Charm timer -->
+          <div class="hud-panel motes-bar-panel">
+            <div id="hud-charm-badge" class="charm-badge hidden">
+              🎐 Bùa Gió: <span id="hud-charm-time">10.0s</span>
+            </div>
+            <div class="motes-header">
+              <span class="hud-label">Đom đóm</span>
+              <span id="hud-carried-text" class="gold-val">0 / 10</span>
+            </div>
+            <div id="hud-mote-slots" class="mote-slots"></div>
+          </div>
+
+          <!-- Bottom-right: Dash & Pulse cooldown icons -->
+          <div class="skills-row">
+            <div id="skill-dash" class="skill-box ready">
+              <div class="skill-key">Shift</div>
+              <div class="skill-name">Lướt</div>
+              <div id="skill-dash-cd" class="skill-cd">Sẵn sàng</div>
+            </div>
+            <div id="skill-pulse" class="skill-box ready">
+              <div class="skill-key">F</div>
+              <div class="skill-name">Tỏa Sáng</div>
+              <div id="skill-pulse-cd" class="skill-cd">Cần 3</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div id="overlay" class="overlay hidden">
-        <div class="overlay-card">
-          <h2 id="overlay-title">Chiến thắng!</h2>
-          <p id="overlay-subtitle">Đảo Bến đã rực sáng trở lại.</p>
-          <div id="overlay-score" class="overlay-score">Điểm: 0</div>
-          <div id="overlay-details" class="overlay-details"></div>
-          <button id="btn-restart" class="primary-btn">Chơi lại (R)</button>
+      <!-- Main Menu Screen -->
+      <div id="screen-menu" class="modal-screen">
+        <div class="modal-card wide">
+          <div class="modal-eyebrow">HÀNH TRÌNH BA HÒN ĐẢO</div>
+          <h1 class="modal-title">Đảo Đèn Lồng</h1>
+          <p class="modal-desc">
+            Đồng hành cùng Mây qua Đảo Bến, Đảo Cau và Đảo Chuông — thu thập đom đóm, thắp sáng các Đèn Lồng Lớn và đẩy lùi sương đen trước bình minh.
+          </p>
+          <div class="btn-stack">
+            <button id="btn-start-campaign" class="primary-btn">Bắt đầu hành trình (3 Đêm)</button>
+            <div class="night-select-row">
+              <button class="secondary-btn night-pick-btn" data-night="1">Đêm 1: Đảo Bến</button>
+              <button class="secondary-btn night-pick-btn" data-night="2">Đêm 2: Đảo Cau</button>
+              <button class="secondary-btn night-pick-btn" data-night="3">Đêm 3: Đảo Chuông</button>
+            </div>
+            <button id="btn-open-settings-menu" class="ghost-btn">⚙ Cài đặt</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Night Intro Screen -->
+      <div id="screen-intro" class="modal-screen hidden">
+        <div class="modal-card">
+          <div id="intro-eyebrow" class="modal-eyebrow">ĐÊM 1 / 3</div>
+          <h2 id="intro-title" class="modal-title">Đảo Bến</h2>
+          <blockquote id="intro-quote" class="intro-quote"></blockquote>
+          <div id="intro-meta" class="intro-meta"></div>
+          <button id="btn-begin-night" class="primary-btn">Bắt đầu Đêm</button>
+        </div>
+      </div>
+
+      <!-- Pause Menu Screen -->
+      <div id="screen-pause" class="modal-screen hidden">
+        <div class="modal-card">
+          <div class="modal-eyebrow">TẠM DỪNG</div>
+          <h2 class="modal-title">Đêm Đang Ngưng Đọng</h2>
+          <div class="btn-stack">
+            <button id="btn-resume" class="primary-btn">Tiếp tục</button>
+            <button id="btn-restart-pause" class="secondary-btn">Chơi lại Đêm</button>
+            <button id="btn-settings-pause" class="secondary-btn">Cài đặt</button>
+            <button id="btn-menu-pause" class="ghost-btn">Về menu chính</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="screen-settings" class="modal-screen hidden">
+        <div class="modal-card">
+          <div class="modal-eyebrow">CÀI ĐẶT</div>
+          <h2 class="modal-title">Âm thanh & Điều khiển</h2>
+          <div class="setting-group">
+            <label for="input-volume">
+              Âm lượng tổng: <strong id="val-volume">70%</strong>
+            </label>
+            <input id="input-volume" type="range" min="0" max="100" value="70" />
+          </div>
+          <div class="setting-group">
+            <label for="input-sens">
+              Độ nhạy chuột: <strong id="val-sens">0.40</strong>
+            </label>
+            <input id="input-sens" type="range" min="10" max="150" value="40" />
+          </div>
+          <button id="btn-close-settings" class="primary-btn">Lưu & Đóng</button>
+        </div>
+      </div>
+
+      <!-- Night Result / Dawn Screen -->
+      <div id="screen-result" class="modal-screen hidden">
+        <div class="modal-card">
+          <div id="result-eyebrow" class="modal-eyebrow">KẾT QUẢ</div>
+          <h2 id="result-title" class="modal-title">Chiến thắng!</h2>
+          <p id="result-subtitle" class="modal-desc"></p>
+          <div id="result-score" class="result-score">Điểm: 0</div>
+          <div id="result-details" class="result-details"></div>
+          <div class="btn-stack">
+            <button id="btn-result-primary" class="primary-btn">Sang Đêm kế tiếp</button>
+            <button id="btn-result-retry" class="secondary-btn">Chơi lại Đêm này</button>
+            <button id="btn-result-menu" class="ghost-btn">Về menu chính</button>
+          </div>
         </div>
       </div>
     </div>
