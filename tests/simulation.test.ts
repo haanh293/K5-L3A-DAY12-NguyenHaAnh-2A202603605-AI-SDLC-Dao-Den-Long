@@ -3,13 +3,14 @@ import { DEFAULT_TUNING, PULSE_PUSH_TICKS } from '../src/core/config.js';
 import { GameSimulation, createDefaultInputState } from '../src/core/simulation.js';
 
 /**
- * Phase 1 regression tests updated to standardized Phase 2 tuning (Ticket-02):
- * - pickup_radius: 1.5 -> 1.0, interact_radius: 2.5 -> 2.0, lantern_cost: 3 -> 10
- * - pulse_cost: 1 -> 3, pulse_radius: 6.0 -> 5.0 (3D from player.y+0.8), 4m push over 15 ticks
- * - score: +10 awarded on deposit (not pickup); +5 per stunned shade
- * - hit drop: Math.floor(carried / 2)
+ * Phase 1 regression tests updated for Ticket-03 (Contract v1.2):
+ * - Ticket-03 [THAY THẾ] replaced early `all_lit` win with `dawn_survived` at time_left_s === 0
+ *   (requiring >= ceil(0.6 * total) lit lanterns) and changed deposit score to +5/mote,
+ *   removed time bonus, and added dawn bonus (50 + floor(fuel)) per lit lantern + 50 per flame.
+ * - All unaffected Phase 1 rules (movement, pickup, deposit, pulse, safe zone >= 30 fuel, dawn loss)
+ *   continue to pass unchanged.
  */
-describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)', () => {
+describe('Phase 1 core mechanics regression (updated for Ticket-03 Contract v1.2)', () => {
   it('moves player according to cam_yaw_deg formula and normalizes diagonal move', () => {
     const sim = new GameSimulation({
       seed: 1,
@@ -33,7 +34,7 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
     expect(dist).toBeCloseTo(DEFAULT_TUNING.player_speed, 2);
   });
 
-  it('picks up motes, deposits into lantern (+10/deposited), lights lantern (+100), and wins', () => {
+  it('picks up motes, lights lantern (+5/mote, +100 first light, relight:false) and does NOT end early when all lit', () => {
     const sim = new GameSimulation({
       seed: 7,
       night: 1,
@@ -49,33 +50,31 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
         shades: [],
         lanterns: [
           { id: 'L1', pos: [0, 0, 1.8], deposited: 0, lit: false },
-          { id: 'L2', lit: true },
-          { id: 'L3', lit: true },
-          { id: 'L4', lit: true },
-          { id: 'L5', lit: true },
+          { id: 'L2', lit: true, fuel: 100 },
+          { id: 'L3', lit: true, fuel: 100 },
+          { id: 'L4', lit: true, fuel: 100 },
+          { id: 'L5', lit: true, fuel: 100 },
         ],
-        time_left_s: 100,
+        time_left_s: 10,
       },
     });
 
     expect(sim.score).toBe(0);
 
-    // Tick 1: picks up 3 motes within pickup_radius=1.0 -> carried=10 (score still 0 until deposit)
     const ev1 = sim.step(createDefaultInputState());
     expect(ev1.filter((e) => e.name === 'mote_picked').length).toBe(3);
     expect(sim.player.carried).toBe(10);
-    expect(sim.score).toBe(0);
 
-    // Tick 2: interact deposits 10 motes into L1 (dist 1.8 <= 2.0) -> lights L1 & wins
     const interactInput = createDefaultInputState();
     interactInput.interact = true;
     const ev2 = sim.step(interactInput);
     expect(ev2.some((e) => e.name === 'deposit')).toBe(true);
-    expect(ev2.some((e) => e.name === 'lantern_lit')).toBe(true);
-    expect(ev2.some((e) => e.name === 'game_over' && e.data.result === 'won')).toBe(true);
-    expect(sim.state).toBe('won');
-    // 10*10 (deposit) + 100 (lantern) + 99*2 (time) + 3*50 (flames) = 548
-    expect(sim.score).toBe(100 + 100 + 99 * 2 + 150);
+    const litEv = ev2.find((e) => e.name === 'lantern_lit');
+    expect(litEv?.data).toEqual({ lantern_id: 'L1', relight: false });
+    // Ticket-03: lighting all 5 does NOT trigger early win
+    expect(sim.state).toBe('playing');
+    expect(sim.score).toBe(10 * 5 + 100);
+    expect(sim.getPlayerCapacity()).toBe(12);
   });
 
   it('pulse costs 3 motes, stuns for 120 ticks, pushes 4m over 15 ticks, and awards +5/shade', () => {
@@ -101,7 +100,6 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
     expect(sim.score).toBe(DEFAULT_TUNING.score.per_stun);
     expect(sim.shades[0].state).toBe('stunned');
 
-    // Finish remaining 14 push ticks
     const idle = createDefaultInputState();
     for (let i = 1; i < PULSE_PUSH_TICKS; i++) sim.step(idle);
     expect(sim.shades[0].pos[2]).toBeCloseTo(4 + DEFAULT_TUNING.pulse_push_m, 2);
@@ -124,13 +122,13 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
     const hit = ev.find((e) => e.name === 'player_hit');
     expect(hit).toBeDefined();
     expect(hit?.data.flames).toBe(1);
-    expect(hit?.data.dropped).toBe(2); // floor(5 / 2) = 2
+    expect(hit?.data.dropped).toBe(2);
     expect(sim.player.carried).toBe(3);
     expect(sim.shades[0].state).toBe('recoil');
     expect(sim.motes.filter((m) => m.kind === 'dropped').length).toBe(2);
   });
 
-  it('keeps shades outside lit lantern safe_radius (6m)', () => {
+  it('keeps shades outside lit lantern safe_radius (6m) when fuel >= 30', () => {
     const sim = new GameSimulation({
       seed: 11,
       night: 1,
@@ -139,7 +137,7 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
         random_motes: false,
         random_shades: false,
         motes: [],
-        lanterns: [{ id: 'L1', pos: [0, 0, 25], lit: true }],
+        lanterns: [{ id: 'L1', pos: [0, 0, 25], lit: true, fuel: 80 }],
         shades: [{ id: 'S1', pos: [0, 0.8, 32], state: 'chase' }],
       },
     });
@@ -150,7 +148,7 @@ describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)
     expect(sim.player.flames).toBe(3);
   });
 
-  it('triggers dawn loss when time_left_s reaches 0', () => {
+  it('triggers dawn loss when time_left_s reaches 0 with < 60% lanterns lit', () => {
     const sim = new GameSimulation({
       seed: 12,
       night: 1,
