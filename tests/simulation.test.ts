@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TUNING } from '../src/core/config.js';
+import { DEFAULT_TUNING, PULSE_PUSH_TICKS } from '../src/core/config.js';
 import { GameSimulation, createDefaultInputState } from '../src/core/simulation.js';
 
-describe('GameSimulation core mechanics (Phase 1)', () => {
+/**
+ * Phase 1 regression tests updated to standardized Phase 2 tuning (Ticket-02):
+ * - pickup_radius: 1.5 -> 1.0, interact_radius: 2.5 -> 2.0, lantern_cost: 3 -> 10
+ * - pulse_cost: 1 -> 3, pulse_radius: 6.0 -> 5.0 (3D from player.y+0.8), 4m push over 15 ticks
+ * - score: +10 awarded on deposit (not pickup); +5 per stunned shade
+ * - hit drop: Math.floor(carried / 2)
+ */
+describe('Phase 1 core mechanics regression (with Ticket-02 standardized tuning)', () => {
   it('moves player according to cam_yaw_deg formula and normalizes diagonal move', () => {
     const sim = new GameSimulation({
       seed: 1,
@@ -10,7 +17,6 @@ describe('GameSimulation core mechanics (Phase 1)', () => {
       scenario: { random_motes: false, random_shades: false, motes: [], shades: [] },
     });
 
-    // Move [0, 1] at yaw 0 => +Z at player_speed (6 m/s) for 60 ticks = 6.0m
     const inp = createDefaultInputState();
     inp.move = [0, 1];
     inp.cam_yaw_deg = 0;
@@ -18,32 +24,31 @@ describe('GameSimulation core mechanics (Phase 1)', () => {
     expect(sim.player.pos[0]).toBeCloseTo(0, 3);
     expect(sim.player.pos[2]).toBeCloseTo(DEFAULT_TUNING.player_speed, 3);
 
-    // Move [1, 1] normalized => distance moved in 60 ticks equals player_speed
     const startX = sim.player.pos[0];
     const startZ = sim.player.pos[2];
     inp.move = [1, 1];
-    inp.cam_yaw_deg = 90; // cos=0, sin=1 => x'=z, z'=-x
+    inp.cam_yaw_deg = 90;
     for (let i = 0; i < 60; i++) sim.step(inp);
     const dist = Math.hypot(sim.player.pos[0] - startX, sim.player.pos[2] - startZ);
     expect(dist).toBeCloseTo(DEFAULT_TUNING.player_speed, 2);
   });
 
-  it('picks up motes, deposits into lantern, lights lantern, and wins when all lit', () => {
+  it('picks up motes, deposits into lantern (+10/deposited), lights lantern (+100), and wins', () => {
     const sim = new GameSimulation({
       seed: 7,
       night: 1,
       scenario: {
-        player: { pos: [0, 0, 0], carried: 0, flames: 3 },
+        player: { pos: [0, 0, 0], carried: 7, flames: 3 },
         random_motes: false,
         random_shades: false,
         motes: [
-          [0, 0, 1],
-          [0, 0, 1.2],
-          [0, 0, 1.4],
+          [0, 0, 0.5],
+          [0, 0, 0.7],
+          [0, 0, 0.9],
         ],
         shades: [],
         lanterns: [
-          { id: 'L1', pos: [0, 0, 2], deposited: 0, lit: false },
+          { id: 'L1', pos: [0, 0, 1.8], deposited: 0, lit: false },
           { id: 'L2', lit: true },
           { id: 'L3', lit: true },
           { id: 'L4', lit: true },
@@ -53,17 +58,15 @@ describe('GameSimulation core mechanics (Phase 1)', () => {
       },
     });
 
-    // Scenario setup emits no score
     expect(sim.score).toBe(0);
 
-    // Tick 1: standing at (0,0,0) picks up all 3 motes within pickup_radius=1.5
+    // Tick 1: picks up 3 motes within pickup_radius=1.0 -> carried=10 (score still 0 until deposit)
     const ev1 = sim.step(createDefaultInputState());
-    const picked = ev1.filter((e) => e.name === 'mote_picked');
-    expect(picked.length).toBe(3);
-    expect(sim.player.carried).toBe(3);
-    expect(sim.score).toBe(3 * DEFAULT_TUNING.score.per_mote);
+    expect(ev1.filter((e) => e.name === 'mote_picked').length).toBe(3);
+    expect(sim.player.carried).toBe(10);
+    expect(sim.score).toBe(0);
 
-    // Tick 2: interact rising edge deposits 3 motes into L1 (distance 2 <= 2.5), lighting it & winning
+    // Tick 2: interact deposits 10 motes into L1 (dist 1.8 <= 2.0) -> lights L1 & wins
     const interactInput = createDefaultInputState();
     interactInput.interact = true;
     const ev2 = sim.step(interactInput);
@@ -71,18 +74,20 @@ describe('GameSimulation core mechanics (Phase 1)', () => {
     expect(ev2.some((e) => e.name === 'lantern_lit')).toBe(true);
     expect(ev2.some((e) => e.name === 'game_over' && e.data.result === 'won')).toBe(true);
     expect(sim.state).toBe('won');
+    // 10*10 (deposit) + 100 (lantern) + 99*2 (time) + 3*50 (flames) = 548
+    expect(sim.score).toBe(100 + 100 + 99 * 2 + 150);
   });
 
-  it('pulse stuns and pushes shades within pulse_radius and enforces cooldown', () => {
+  it('pulse costs 3 motes, stuns for 120 ticks, pushes 4m over 15 ticks, and awards +5/shade', () => {
     const sim = new GameSimulation({
       seed: 3,
       night: 1,
       scenario: {
-        player: { pos: [0, 0, 0], carried: 3, flames: 3 },
+        player: { pos: [0, 0, 0], carried: 5, flames: 3 },
         random_motes: false,
         random_shades: false,
         motes: [],
-        shades: [{ id: 'S1', pos: [0, 0, 4] }],
+        shades: [{ id: 'S1', pos: [0, 0.8, 4] }],
       },
     });
 
@@ -92,53 +97,56 @@ describe('GameSimulation core mechanics (Phase 1)', () => {
     const pulseEv = ev.find((e) => e.name === 'pulse');
     expect(pulseEv).toBeDefined();
     expect(pulseEv?.data.stunned_ids).toEqual(['S1']);
-    expect(sim.player.carried).toBe(3 - DEFAULT_TUNING.pulse_cost);
+    expect(sim.player.carried).toBe(5 - DEFAULT_TUNING.pulse_cost);
+    expect(sim.score).toBe(DEFAULT_TUNING.score.per_stun);
     expect(sim.shades[0].state).toBe('stunned');
-    expect(sim.shades[0].pos[2]).toBeGreaterThanOrEqual(4 + DEFAULT_TUNING.pulse_push_m - 0.1);
+
+    // Finish remaining 14 push ticks
+    const idle = createDefaultInputState();
+    for (let i = 1; i < PULSE_PUSH_TICKS; i++) sim.step(idle);
+    expect(sim.shades[0].pos[2]).toBeCloseTo(4 + DEFAULT_TUNING.pulse_push_m, 2);
   });
 
-  it('shades respect safe_radius around lit lanterns and damage player on contact', () => {
+  it('shades damage player on contact (<= 1.0m), drop floor(carried/2), and recoil', () => {
     const sim = new GameSimulation({
       seed: 9,
       night: 1,
       scenario: {
-        player: { pos: [0, 0, 0], carried: 2, flames: 1 },
+        player: { pos: [0, 0, 0], carried: 5, flames: 2 },
         random_motes: false,
         random_shades: false,
         motes: [],
-        shades: [{ id: 'S1', pos: [0, 0, 1.0] }],
+        shades: [{ id: 'S1', pos: [0, 0.8, 0.9], state: 'chase' }],
       },
     });
 
-    // Tick 1: shade is within shade_hit_radius=1.2 => player_hit => flames 0 => game_over lost
     const ev = sim.step(createDefaultInputState());
     const hit = ev.find((e) => e.name === 'player_hit');
     expect(hit).toBeDefined();
-    expect(hit?.data.flames).toBe(0);
-    expect(hit?.data.dropped).toBe(1);
-    expect(sim.state).toBe('lost');
-    expect(ev.some((e) => e.name === 'game_over' && e.data.reason === 'no_flames')).toBe(true);
+    expect(hit?.data.flames).toBe(1);
+    expect(hit?.data.dropped).toBe(2); // floor(5 / 2) = 2
+    expect(sim.player.carried).toBe(3);
+    expect(sim.shades[0].state).toBe('recoil');
+    expect(sim.motes.filter((m) => m.kind === 'dropped').length).toBe(2);
   });
 
-  it('keeps shades outside lit lantern safe_radius', () => {
+  it('keeps shades outside lit lantern safe_radius (6m)', () => {
     const sim = new GameSimulation({
       seed: 11,
       night: 1,
       scenario: {
-        player: { pos: [0, 0, 20], carried: 0, flames: 3 },
+        player: { pos: [0, 0, 25], carried: 0, flames: 3 },
         random_motes: false,
         random_shades: false,
         motes: [],
-        lanterns: [{ id: 'L1', pos: [0, 0, 20], lit: true }],
-        shades: [{ id: 'S1', pos: [0, 0, 26] }],
+        lanterns: [{ id: 'L1', pos: [0, 0, 25], lit: true }],
+        shades: [{ id: 'S1', pos: [0, 0.8, 32], state: 'chase' }],
       },
     });
 
-    for (let i = 0; i < 120; i++) {
-      sim.step(createDefaultInputState());
-    }
-    const dist = Math.hypot(sim.shades[0].pos[0] - 0, sim.shades[0].pos[2] - 20);
-    expect(dist).toBeGreaterThan(DEFAULT_TUNING.safe_radius);
+    for (let i = 0; i < 120; i++) sim.step(createDefaultInputState());
+    const dist = Math.hypot(sim.shades[0].pos[0], sim.shades[0].pos[2] - 25);
+    expect(dist).toBeGreaterThanOrEqual(DEFAULT_TUNING.safe_radius);
     expect(sim.player.flames).toBe(3);
   });
 
