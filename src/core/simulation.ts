@@ -410,13 +410,21 @@ export class GameSimulation {
     fromPos: Vec3,
     predicate: (l: LanternEntity) => boolean
   ): LanternEntity | null {
-    const candidates = this.lanterns.filter(predicate).sort((a, b) => {
-      const da = distXZ(fromPos, a.pos);
-      const db = distXZ(fromPos, b.pos);
-      if (Math.abs(da - db) > 1e-9) return da - db;
-      return compareId(a, b);
-    });
-    return candidates[0] ?? null;
+    let best: LanternEntity | null = null;
+    let bestDist = Infinity;
+    for (const l of this.lanterns) {
+      if (!predicate(l)) continue;
+      const d = distXZ(fromPos, l.pos);
+      if (
+        best === null ||
+        d < bestDist - 1e-9 ||
+        (Math.abs(d - bestDist) <= 1e-9 && l.id < best.id)
+      ) {
+        best = l;
+        bestDist = d;
+      }
+    }
+    return best;
   }
 
   private triggerSafeZonePushout(lantern: LanternEntity): void {
@@ -609,15 +617,14 @@ export class GameSimulation {
     const pulsePressed = input.pulse && !this.prevInput.pulse;
     const dashPressed = input.dash && !this.prevInput.dash;
 
-    this.prevInput = {
-      move: [input.move[0], input.move[1]],
-      cam_yaw_deg: input.cam_yaw_deg,
-      jump: input.jump,
-      interact: input.interact,
-      pulse: input.pulse,
-      dash: input.dash,
-      pause: input.pause,
-    };
+    this.prevInput.move[0] = input.move[0];
+    this.prevInput.move[1] = input.move[1];
+    this.prevInput.cam_yaw_deg = input.cam_yaw_deg;
+    this.prevInput.jump = input.jump;
+    this.prevInput.interact = input.interact;
+    this.prevInput.pulse = input.pulse;
+    this.prevInput.dash = input.dash;
+    this.prevInput.pause = input.pause;
 
     if (pausePressed) {
       if (this.state === 'playing') {
@@ -699,26 +706,29 @@ export class GameSimulation {
     }
 
     // Step 2 (Ticket-03): Lantern fuel decay (1/60) + shade drain (5/60 each), then extinguish <= 0
-    const shadesByIdForDrain = [...this.shades].sort(compareId);
+    const hasDrainingShade = this.shades.some((s) => s.state === 'drain');
+    const shadesByIdForDrain = hasDrainingShade ? [...this.shades].sort(compareId) : null;
     for (const lantern of this.lanterns) {
       if (!lantern.lit) continue;
       lantern.fuelSixtieths -= FUEL_DECAY_PER_TICK_60;
 
-      for (const shade of shadesByIdForDrain) {
-        if (shade.state === 'drain' && shade.targetLanternId === lantern.id) {
-          lantern.fuelSixtieths -= FUEL_DRAIN_PER_TICK_60;
-          shade.drainTicks += 1;
-          if (shade.drainTicks % FUEL_DRAIN_EVENT_INTERVAL === 0) {
-            events.push({
-              type: 'event',
-              tick: this.tick,
-              name: 'fuel_drain',
-              data: {
-                lantern_id: lantern.id,
-                shade_id: shade.id,
-                fuel: round1(Math.max(0, lantern.fuelSixtieths) / TICK_RATE),
-              },
-            });
+      if (shadesByIdForDrain) {
+        for (const shade of shadesByIdForDrain) {
+          if (shade.state === 'drain' && shade.targetLanternId === lantern.id) {
+            lantern.fuelSixtieths -= FUEL_DRAIN_PER_TICK_60;
+            shade.drainTicks += 1;
+            if (shade.drainTicks % FUEL_DRAIN_EVENT_INTERVAL === 0) {
+              events.push({
+                type: 'event',
+                tick: this.tick,
+                name: 'fuel_drain',
+                data: {
+                  lantern_id: lantern.id,
+                  shade_id: shade.id,
+                  fuel: round1(Math.max(0, lantern.fuelSixtieths) / TICK_RATE),
+                },
+              });
+            }
           }
         }
       }
@@ -1345,32 +1355,36 @@ export class GameSimulation {
 
     // 9. Collisions: Drifters steal FIRST, then Shades hit (sorted by ascending id)
     if (this.player.respawnTicks === 0) {
-      const driftersById = [...this.drifters].sort(compareId);
-      for (const drifter of driftersById) {
-        if (drifter.spawnTick === this.simTick) continue;
-        if (drifter.state !== 'chase' || drifter.hasStolen) continue;
-        if (distXZ(drifter.pos, this.player.pos) <= DRIFTER_STEAL_RADIUS) {
-          const amount = Math.min(DRIFTER_MAX_STEAL, this.player.carried);
-          this.player.carried -= amount;
-          drifter.stolen = amount;
-          drifter.hasStolen = true;
-          drifter.state = 'flee';
-          drifter.fleeTicksLeft = DRIFTER_FLEE_TICKS;
-          events.push({
-            type: 'event',
-            tick: this.tick,
-            name: 'drifter_steal',
-            data: {
-              drifter_id: drifter.id,
-              amount,
-              carried: this.player.carried,
-            },
-          });
+      if (this.drifters.length > 0) {
+        const driftersById =
+          this.drifters.length === 1 ? this.drifters : [...this.drifters].sort(compareId);
+        for (const drifter of driftersById) {
+          if (drifter.spawnTick === this.simTick) continue;
+          if (drifter.state !== 'chase' || drifter.hasStolen) continue;
+          if (distXZ(drifter.pos, this.player.pos) <= DRIFTER_STEAL_RADIUS) {
+            const amount = Math.min(DRIFTER_MAX_STEAL, this.player.carried);
+            this.player.carried -= amount;
+            drifter.stolen = amount;
+            drifter.hasStolen = true;
+            drifter.state = 'flee';
+            drifter.fleeTicksLeft = DRIFTER_FLEE_TICKS;
+            events.push({
+              type: 'event',
+              tick: this.tick,
+              name: 'drifter_steal',
+              data: {
+                drifter_id: drifter.id,
+                amount,
+                carried: this.player.carried,
+              },
+            });
+          }
         }
       }
 
-      if (this.player.invulnTicks === 0) {
-        const shadesById = [...this.shades].sort(compareId);
+      if (this.player.invulnTicks === 0 && this.shades.length > 0) {
+        const shadesById =
+          this.shades.length === 1 ? this.shades : [...this.shades].sort(compareId);
         for (const shade of shadesById) {
           if (shade.spawnTick === this.simTick) continue;
           if (
