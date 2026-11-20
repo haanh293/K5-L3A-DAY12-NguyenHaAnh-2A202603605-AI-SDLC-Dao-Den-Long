@@ -1,20 +1,17 @@
 ---
 name: verify-phase
-description: Run build, unit/regression tests, Contract v1.2 headless scenarios (fuel decay, refuel, lantern_out, relight, shade drain, dawn_survived, progressive capacity), performance benchmark, and determinism checks.
+description: Run build, all unit/regression/v1.3 tests, Phase 3+4 headless scenarios, 10-night soak test, leaderboard export verification, and determinism checks.
 ---
 
-# Verify Phase Skill (v1.2)
+# Verify Phase Skill (v1.3 — Release v1.0.0)
 
-Use this skill before tagging any phase (`phase-3` .. `phase-4`) or after any change to `src/core/`, `src/headless/`, or `game.contract.json`.
+Use this skill before tagging `phase-4` / creating Release `v1.0.0` or after any code change.
 
 ## Steps
 1. Run `npm run build` to verify TypeScript headless compilation (`dist-headless/`) and Vite production bundle (`dist/`).
-2. Run `npm test` to execute all Vitest unit, Phase 1–2 regression, and Phase 3 Contract v1.2 tests.
-3. Run `node scripts/verify-phase3.mjs` to execute headless scenarios for:
-   - Fuel decay (1/s), `lantern_out`, relight cost (5 motes, `+40` pts, `relight: true`), and progressive capacity (`10 + 2 * successful_lights`, max 20)
-   - Refuel (`ceil((100-fuel)/10)` motes, `+5`/mote, full lantern ignored)
-   - Shade `drain` on weak lantern (`fuel < 30`, `-5/s`, `fuel_drain` every 60 ticks, `+15` pulse bonus on draining shade)
-   - Dawn win rule (`dawn_survived` when `lit >= ceil(0.6*total)` at end of night, NO early `all_lit` win, dawn score `50 + floor(fuel)` per lit lantern + `50` per flame)
-   - Phase 2 regression (Dash, Fall, Pause, Jump Pad, Wind Charm, Drifter, Night 3 Wind)
-   - Full Night 3 (18,000 ticks) speed (≤ 30s) & byte-for-byte determinism
-4. Save real JSONL outputs to `docs/proof/phase-3/`. Do NOT tag if any step exits non-zero.
+2. Run `npm test` to execute all Vitest unit, Phase 1–3 regression, leaderboard, and Contract v1.3 tests.
+3. Run `node scripts/verify-phase3.mjs` to verify Contract v1.2/v1.3 headless gameplay scenarios & determinism.
+4. Run `node scripts/soak.mjs --seed 7 --nights 10 --out soak.json` and assert `crashes === 0` and `mem_end_mb <= 1.2 * mem_start_mb`.
+5. Run `node scripts/run-app.mjs --export-leaderboard tmp/lb-export.json` and verify valid `{"entries":[...]}` schema.
+6. Run `node scripts/bench.mjs --seed 42 --duration 30 --out bench.json` (on a machine with Chrome/Chromium/Edge + GPU) and verify `avg_fps >= 60`, `p1_low_fps >= 30`, `load_ms <= 10000`.
+7. Do NOT tag or release if any step fails.

@@ -20,3 +20,5 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: node scripts/verify-phase3.mjs
+      - run: node --expose-gc scripts/soak.mjs --seed 7 --nights 10 --out tmp/soak-ci.json
+      - run: node scripts/run-app.mjs --export-leaderboard tmp/lb-ci.json

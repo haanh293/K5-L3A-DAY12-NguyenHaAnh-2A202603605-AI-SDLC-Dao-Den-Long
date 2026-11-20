@@ -7,3 +7,5 @@ dist-headless/
 .DS_Store
 coverage/
 tmp/
+data/
+release/
