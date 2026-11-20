@@ -9,7 +9,7 @@
     "build:headless": "tsc -p tsconfig.headless.json",
     "preview": "vite preview --host",
     "test": "vitest run",
-    "verify": "npm run build:headless && npm test && node scripts/verify-phase2.mjs"
+    "verify": "npm run build:headless && npm test && node scripts/verify-phase3.mjs"
   },
   "dependencies": {
     "three": "^0.170.0"
