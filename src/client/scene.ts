@@ -7,13 +7,18 @@ interface LanternVisual {
   group: THREE.Group;
   core: THREE.Mesh;
   coreMat: THREE.MeshStandardMaterial;
+  tearMarks: THREE.Group;
   light: THREE.PointLight;
   ring: THREE.Mesh;
+  fuelBarGroup: THREE.Group;
+  fuelFill: THREE.Mesh;
+  fuelFillMat: THREE.MeshBasicMaterial;
 }
 
 interface ShadeVisual {
   group: THREE.Group;
   bodyMat: THREE.MeshStandardMaterial;
+  eyeMat: THREE.MeshBasicMaterial;
 }
 
 interface PulseWave {
@@ -413,12 +418,43 @@ export class LanternIslandScene {
     core.position.y = 3.5;
     group.add(core);
 
+    // Non-color distinction for unlit lanterns: dark torn paper seams
+    const tearMarks = new THREE.Group();
+    tearMarks.position.y = 3.5;
+    const tearMat = new THREE.MeshBasicMaterial({ color: 0x1a1520 });
+    for (let i = 0; i < 4; i++) {
+      const tear = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.62, 0.08), tearMat);
+      const a = (i * Math.PI) / 2;
+      tear.position.set(Math.cos(a) * 0.54, 0, Math.sin(a) * 0.54);
+      tear.rotation.y = -a;
+      tear.rotation.z = 0.42;
+      tearMarks.add(tear);
+    }
+    group.add(tearMarks);
+
     const roof = new THREE.Mesh(
       new THREE.ConeGeometry(1.1, 0.6, 6),
       new THREE.MeshStandardMaterial({ color: PALETTE.wood, roughness: 0.8 })
     );
     roof.position.y = 4.25;
     group.add(roof);
+
+    // Floating 3D fuel bar above lit lanterns
+    const fuelBarGroup = new THREE.Group();
+    fuelBarGroup.position.y = 5.1;
+    const fuelBg = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.7, 0.24),
+      new THREE.MeshBasicMaterial({ color: 0x0e1430, side: THREE.DoubleSide })
+    );
+    const fuelFillMat = new THREE.MeshBasicMaterial({
+      color: PALETTE.lanternLit,
+      side: THREE.DoubleSide,
+    });
+    const fuelFill = new THREE.Mesh(new THREE.PlaneGeometry(1.6, 0.16), fuelFillMat);
+    fuelFill.position.z = 0.01;
+    fuelBarGroup.add(fuelBg, fuelFill);
+    fuelBarGroup.visible = false;
+    group.add(fuelBarGroup);
 
     const light = new THREE.PointLight(PALETTE.lanternLit, 0, 22, 1.5);
     light.position.y = 3.5;
@@ -438,7 +474,17 @@ export class LanternIslandScene {
     group.add(ring);
 
     this.scene.add(group);
-    const vis = { group, core, coreMat, light, ring };
+    const vis = {
+      group,
+      core,
+      coreMat,
+      tearMarks,
+      light,
+      ring,
+      fuelBarGroup,
+      fuelFill,
+      fuelFillMat,
+    };
     this.lanternVisuals.set(id, vis);
     return vis;
   }
@@ -464,7 +510,7 @@ export class LanternIslandScene {
     group.add(rightEye);
 
     this.scene.add(group);
-    const vis = { group, bodyMat };
+    const vis = { group, bodyMat, eyeMat };
     this.shadeVisuals.set(id, vis);
     return vis;
   }
@@ -540,7 +586,7 @@ export class LanternIslandScene {
     };
   }
 
-  sync(sim: GameSimulation, camYawDeg: number, dt: number): void {
+  sync(sim: GameSimulation, camYawDeg: number, dt: number, colorblind = false): void {
     if (this.currentNight !== sim.night) {
       this.rebuildWorldForNight(sim.night);
     }
@@ -558,11 +604,12 @@ export class LanternIslandScene {
     this.playerGroup.visible = !blinkHidden;
     this.playerLanternLight.intensity = 2.0 + Math.sin(this.visualTime * 5) * 0.2;
 
+    const visualOrbs = Math.min(this.orbitOrbs.length, sim.player.carried);
     for (let i = 0; i < this.orbitOrbs.length; i++) {
       const orb = this.orbitOrbs[i];
-      if (i < sim.player.carried) {
+      if (i < visualOrbs) {
         orb.visible = true;
-        const a = this.visualTime * 2.5 + (i * Math.PI * 2) / Math.max(1, sim.player.carried);
+        const a = this.visualTime * 2.5 + (i * Math.PI * 2) / Math.max(1, visualOrbs);
         orb.position.set(
           Math.cos(a) * 0.9,
           1.25 + Math.sin(this.visualTime * 3.5 + i) * 0.14,
@@ -573,21 +620,51 @@ export class LanternIslandScene {
       }
     }
 
-    // Lanterns + ambient intensity formula (0.15 + 0.55 * lit/total)
+    // Lanterns: fuel bar, 1Hz blink when fuel < 30, 20% squash + torn seams when unlit
     let litCount = 0;
+    const blink1Hz = Math.sin(this.visualTime * Math.PI * 2) >= 0;
     for (const l of sim.lanterns) {
       let vis = this.lanternVisuals.get(l.id);
       if (!vis) vis = this.createLanternVisual(l.id, l.pos);
       vis.group.position.set(l.pos[0], l.pos[1], l.pos[2]);
+      const fuelPct = l.fuelSixtieths / 6000;
+      const isLowFuel = l.lit && l.fuelSixtieths < 1800;
+
       if (l.lit) {
         litCount++;
-        vis.coreMat.color.setHex(PALETTE.lanternCore);
-        vis.coreMat.emissive.setHex(PALETTE.lanternLit);
-        vis.coreMat.emissiveIntensity = 2.2;
-        vis.light.intensity = 5.5;
-        (vis.ring.material as THREE.MeshBasicMaterial).opacity = 0.25;
+        vis.core.scale.set(1, 1, 1);
+        vis.tearMarks.visible = false;
+        vis.fuelBarGroup.visible = true;
+        vis.fuelBarGroup.lookAt(this.camera.position);
+        vis.fuelFill.scale.x = Math.max(0.01, fuelPct);
+        vis.fuelFill.position.x = -0.8 * (1 - fuelPct);
+
+        if (isLowFuel) {
+          vis.coreMat.color.setHex(blink1Hz ? PALETTE.lanternCore : PALETTE.lanternUnlit);
+          vis.coreMat.emissive.setHex(PALETTE.lanternLit);
+          vis.coreMat.emissiveIntensity = blink1Hz ? 1.8 : 0.35;
+          vis.light.intensity = blink1Hz ? 4.2 : 1.2;
+          vis.fuelFillMat.color.setHex(
+            colorblind ? PALETTE.uiDangerColorblind : PALETTE.uiDanger
+          );
+          vis.fuelFill.visible = blink1Hz;
+          (vis.ring.material as THREE.MeshBasicMaterial).opacity = 0; // Safe zone lost < 30
+        } else {
+          vis.coreMat.color.setHex(PALETTE.lanternCore);
+          vis.coreMat.emissive.setHex(PALETTE.lanternLit);
+          vis.coreMat.emissiveIntensity = 2.2;
+          vis.light.intensity = 5.5;
+          vis.fuelFillMat.color.setHex(PALETTE.lanternLit);
+          vis.fuelFill.visible = true;
+          (vis.ring.material as THREE.MeshBasicMaterial).opacity = 0.25;
+        }
       } else {
-        const prog = l.deposited / Math.max(1, sim.tuning.lantern_cost);
+        const cost = l.everLit ? sim.tuning.relight_cost : sim.tuning.lantern_cost;
+        const prog = l.deposited / Math.max(1, cost);
+        // Non-color distinction: unlit lantern squashed 20% + visible torn paper seams
+        vis.core.scale.set(1, 0.8, 1);
+        vis.tearMarks.visible = true;
+        vis.fuelBarGroup.visible = false;
         vis.coreMat.color.setHex(PALETTE.lanternUnlit);
         vis.coreMat.emissiveIntensity = 0.05 + prog * 1.1;
         vis.light.intensity = prog * 1.8;
@@ -632,7 +709,8 @@ export class LanternIslandScene {
       g.position.set(m.pos[0], m.pos[1] + bob, m.pos[2]);
     }
 
-    // Shades
+    // Shades (Colorblind mode: rim & eyes #00B3FF instead of #7A3CFF)
+    const rimHex = colorblind ? PALETTE.shadeRimColorblind : PALETTE.shadeRim;
     const activeShadeIds = new Set(sim.shades.map((s) => s.id));
     for (const [id, vis] of this.shadeVisuals) {
       if (!activeShadeIds.has(id)) {
@@ -643,7 +721,12 @@ export class LanternIslandScene {
     for (const s of sim.shades) {
       let vis = this.shadeVisuals.get(s.id);
       if (!vis) vis = this.createShadeVisual(s.id);
-      vis.group.position.set(s.pos[0], s.pos[1] + Math.sin(this.visualTime * 4 + s.pos[0]) * 0.12, s.pos[2]);
+      vis.eyeMat.color.setHex(rimHex);
+      vis.group.position.set(
+        s.pos[0],
+        s.pos[1] + Math.sin(this.visualTime * 4 + s.pos[0]) * 0.12,
+        s.pos[2]
+      );
       if (s.state === 'stunned') {
         vis.bodyMat.color.setHex(PALETTE.shadeStunned);
         vis.bodyMat.emissive.setHex(PALETTE.lanternCore);
@@ -652,10 +735,16 @@ export class LanternIslandScene {
         vis.group.scale.setScalar(0.84);
       } else {
         vis.bodyMat.color.setHex(PALETTE.shadeBody);
-        vis.bodyMat.emissive.setHex(PALETTE.shadeRim);
-        vis.bodyMat.emissiveIntensity = s.state === 'spawning' ? 1.4 : 0.65;
-        vis.group.scale.setScalar(s.state === 'spawning' ? 0.6 : 1.0);
-        vis.group.rotation.y = Math.atan2(sim.player.pos[0] - s.pos[0], sim.player.pos[2] - s.pos[2]);
+        vis.bodyMat.emissive.setHex(rimHex);
+        vis.bodyMat.emissiveIntensity =
+          s.state === 'drain' ? 1.5 : s.state === 'spawning' ? 1.2 : 0.65;
+        vis.group.scale.setScalar(
+          s.state === 'spawning' ? 0.6 : s.state === 'drain' ? 1.15 : 1.0
+        );
+        vis.group.rotation.y = Math.atan2(
+          sim.player.pos[0] - s.pos[0],
+          sim.player.pos[2] - s.pos[2]
+        );
       }
     }
 

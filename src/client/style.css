@@ -12,6 +12,10 @@
   --panel-border: rgba(242, 193, 78, 0.38);
 }
 
+body.colorblind {
+  --ui-danger: #ffffff;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;
@@ -502,4 +506,17 @@ body,
 .setting-group input[type='range'] {
   width: 100%;
   accent-color: var(--gold-trim);
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+}
+
+.toggle-label input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: #00b3ff;
 }

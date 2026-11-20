@@ -8,6 +8,7 @@ import { LanternIslandScene } from './scene.js';
 interface UserSettings {
   volume: number; // 0..100
   sensitivity: number; // 0.1..1.5
+  colorblind: boolean;
 }
 
 const SETTINGS_KEY = 'dao_den_long_settings_v1';
@@ -20,12 +21,13 @@ function loadSettings(): UserSettings {
       return {
         volume: typeof parsed.volume === 'number' ? parsed.volume : 70,
         sensitivity: typeof parsed.sensitivity === 'number' ? parsed.sensitivity : 0.4,
+        colorblind: Boolean(parsed.colorblind),
       };
     }
   } catch {
     // Ignore storage errors
   }
-  return { volume: 70, sensitivity: 0.4 };
+  return { volume: 70, sensitivity: 0.4, colorblind: false };
 }
 
 function saveSettings(s: UserSettings): void {
@@ -86,15 +88,25 @@ const inputVolume = document.getElementById('input-volume') as HTMLInputElement;
 const valVolume = document.getElementById('val-volume')!;
 const inputSens = document.getElementById('input-sens') as HTMLInputElement;
 const valSens = document.getElementById('val-sens')!;
+const inputColorblind = document.getElementById('input-colorblind') as HTMLInputElement;
 
-// Build 10 firefly slots
-const moteSlotEls: HTMLDivElement[] = [];
-for (let i = 0; i < 10; i++) {
-  const el = document.createElement('div');
-  el.className = 'mote-slot';
-  hudMoteSlots.appendChild(el);
-  moteSlotEls.push(el);
+// Dynamic firefly slots (10..20 matching player capacity)
+let currentRenderedSlots = 0;
+let moteSlotEls: HTMLDivElement[] = [];
+function ensureMoteSlots(capacity: number): void {
+  if (currentRenderedSlots === capacity) return;
+  currentRenderedSlots = capacity;
+  hudMoteSlots.innerHTML = '';
+  hudMoteSlots.style.gridTemplateColumns = `repeat(${Math.min(10, capacity)}, 1fr)`;
+  moteSlotEls = [];
+  for (let i = 0; i < capacity; i++) {
+    const el = document.createElement('div');
+    el.className = 'mote-slot';
+    hudMoteSlots.appendChild(el);
+    moteSlotEls.push(el);
+  }
 }
+ensureMoteSlots(10);
 
 const scene = new LanternIslandScene(canvas);
 const sfx = new SoundEffects();
@@ -104,6 +116,8 @@ inputVolume.value = String(settings.volume);
 valVolume.textContent = `${settings.volume}%`;
 inputSens.value = String(Math.round(settings.sensitivity * 100));
 valSens.textContent = settings.sensitivity.toFixed(2);
+inputColorblind.checked = settings.colorblind;
+document.body.classList.toggle('colorblind', settings.colorblind);
 
 type UiMode = 'menu' | 'intro' | 'playing' | 'paused' | 'result';
 let uiMode: UiMode = 'menu';
@@ -159,8 +173,9 @@ function openNightIntro(night: NightNumber, resetCampaignScore: boolean): void {
   introEyebrow.textContent = `ĐÊM ${night} / 3`;
   introTitle.textContent = mapDef.name;
   introQuote.textContent = mapDef.introQuote;
+  const threshold = Math.ceil(0.6 * mapDef.lanterns.length);
   introMeta.textContent =
-    `Mục tiêu: Thắp ${mapDef.lanterns.length} Đèn Lồng Lớn · Thời gian: ${Math.floor(mapDef.durationS / 60)} phút ${mapDef.durationS % 60 ? `${mapDef.durationS % 60} giây` : ''}`;
+    `Mục tiêu: Giữ sáng ≥ ${threshold}/${mapDef.lanterns.length} Đèn Lồng tới bình minh · Thời gian: ${Math.floor(mapDef.durationS / 60)} phút ${mapDef.durationS % 60 ? `${mapDef.durationS % 60} giây` : ''}`;
 
   // Pre-build scene background for this night
   runSeedCounter += 1;
@@ -257,6 +272,12 @@ inputSens.addEventListener('input', () => {
   valSens.textContent = settings.sensitivity.toFixed(2);
 });
 
+inputColorblind.addEventListener('change', () => {
+  settings.colorblind = inputColorblind.checked;
+  document.body.classList.toggle('colorblind', settings.colorblind);
+  saveSettings(settings);
+});
+
 window.addEventListener('keydown', (e) => {
   if ((e.code === 'Escape' || e.code === 'KeyP') && !e.repeat) {
     if (uiMode === 'playing' || uiMode === 'paused') {
@@ -334,13 +355,32 @@ function handleEvents(events: EventLine[]): void {
       case 'deposit':
         sfx.deposit();
         showToast(
-          `Nạp ${ev.data.amount} ánh sáng vào ${ev.data.lantern_id} (${ev.data.deposited}/10)`,
+          `Nạp ${ev.data.amount} ánh sáng vào ${ev.data.lantern_id} (${ev.data.deposited})`,
           1.5
+        );
+        break;
+      case 'refuel':
+        sfx.deposit();
+        showToast(
+          `⛽ Châm ${ev.data.amount} đom đóm vào ${ev.data.lantern_id} (Dầu: ${ev.data.fuel}%)`,
+          1.6
         );
         break;
       case 'lantern_lit':
         sfx.lanternLit();
-        showToast(`✨ Đèn Lồng ${ev.data.lantern_id} đã rực sáng!`, 2.2);
+        showToast(
+          ev.data.relight
+            ? `🔥 Thắp lại ${ev.data.lantern_id}! Sức chứa tăng lên ${sim.getPlayerCapacity()}!`
+            : `✨ Đèn Lồng ${ev.data.lantern_id} đã sáng! Sức chứa tăng lên ${sim.getPlayerCapacity()}!`,
+          2.3
+        );
+        break;
+      case 'lantern_out':
+        sfx.playerHit();
+        showToast(`⚠ Đèn ${ev.data.lantern_id} đã cạn dầu và tắt! (Cần 5 đom đóm để thắp lại)`, 2.5);
+        break;
+      case 'fuel_drain':
+        showToast(`⚠ Bóng Mực ${ev.data.shade_id} đang hút dầu đèn ${ev.data.lantern_id} (${ev.data.fuel}%)!`, 2.0);
         break;
       case 'pulse': {
         sfx.pulse();
@@ -426,14 +466,17 @@ function handleEvents(events: EventLine[]): void {
 function updateHud(): void {
   hudFlames.textContent = sim.player.flames > 0 ? '🔥'.repeat(sim.player.flames) : '💨';
   const lit = sim.lanterns.filter((l) => l.lit).length;
-  hudLanterns.textContent = `${lit} / ${sim.lanterns.length}`;
+  const threshold = sim.getWinLanternThreshold();
+  hudLanterns.textContent = `${lit}/${sim.lanterns.length} (≥${threshold})`;
   hudScore.textContent = String(sim.score);
 
   const secLeft = Math.ceil(sim.timeLeftS);
   const mins = Math.floor(secLeft / 60);
   const secs = secLeft % 60;
-  hudTime.textContent = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
-  hudTime.classList.toggle('danger', secLeft <= 30);
+  const clockStr = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  const isDangerTime = secLeft <= 30;
+  hudTime.textContent = isDangerTime && settings.colorblind ? `⚠ ${clockStr}` : clockStr;
+  hudTime.classList.toggle('danger', isDangerTime);
 
   // Last 10s countdown tick SFX
   if (uiMode === 'playing' && secLeft <= 10 && secLeft > 0 && secLeft !== lastCountdownSecond) {
@@ -447,17 +490,19 @@ function updateHud(): void {
   }
   wasWindWarning = sim.wind.warning;
   if (sim.wind.active) {
-    hudWindAlert.textContent = `🌪 Gió mạnh đang thổi (${Math.round(sim.wind.dirDeg)}°)`;
+    hudWindAlert.textContent = `${settings.colorblind ? '⚠ ' : '🌪 '}Gió mạnh đang thổi (${Math.round(sim.wind.dirDeg)}°)`;
     hudWindAlert.classList.remove('hidden');
   } else if (sim.wind.warning) {
-    hudWindAlert.textContent = '🍃 Gió mạnh sắp nổi trong 2 giây!';
+    hudWindAlert.textContent = `${settings.colorblind ? '⚠ ' : '🍃 '}Gió mạnh sắp nổi trong 2 giây!`;
     hudWindAlert.classList.remove('hidden');
   } else {
     hudWindAlert.classList.add('hidden');
   }
 
-  // 10-slot Firefly bar
-  hudCarriedText.textContent = `${sim.player.carried} / ${sim.tuning.carry_capacity}`;
+  // Dynamic Firefly bar (10..20 slots)
+  const capacity = sim.getPlayerCapacity();
+  ensureMoteSlots(capacity);
+  hudCarriedText.textContent = `${sim.player.carried} / ${capacity}`;
   for (let i = 0; i < moteSlotEls.length; i++) {
     moteSlotEls[i].classList.toggle('filled', i < sim.player.carried);
   }
@@ -493,35 +538,49 @@ function updateHud(): void {
     skillPulseCd.textContent = 'Sẵn sàng';
   }
 
-  // Proximity prompt: "E — Nạp ánh sáng (x/10)"
+  // Proximity prompt: interactable lantern (unlit OR lit with fuel < 100)
   let nearLantern = null;
   let nearDist = Infinity;
-  let nearestUnlit = null;
-  let nearestUnlitDist = Infinity;
+  let nearestPriority = null;
+  let nearestPriorityDist = Infinity;
 
   for (const l of sim.lanterns) {
-    if (l.lit) continue;
     const d = Math.hypot(sim.player.pos[0] - l.pos[0], sim.player.pos[2] - l.pos[2]);
-    if (d < nearestUnlitDist) {
-      nearestUnlitDist = d;
-      nearestUnlit = l;
+    const needsAttention = !l.lit || l.fuelSixtieths < 1800;
+    if (needsAttention && d < nearestPriorityDist) {
+      nearestPriorityDist = d;
+      nearestPriority = l;
     }
-    if (d <= sim.tuning.interact_radius && Math.abs(sim.player.pos[1] - l.pos[1]) <= 2.5 && d < nearDist) {
+    const interactable = !l.lit || l.fuelSixtieths < 6000;
+    if (
+      interactable &&
+      d <= sim.tuning.interact_radius &&
+      Math.abs(sim.player.pos[1] - l.pos[1]) <= 2.5 &&
+      d < nearDist
+    ) {
       nearDist = d;
       nearLantern = l;
     }
   }
 
   if (nearLantern && uiMode === 'playing') {
-    hudInteractPrompt.textContent = `E — Nạp ánh sáng (${nearLantern.deposited}/${sim.tuning.lantern_cost})`;
+    if (!nearLantern.lit) {
+      const cost = nearLantern.everLit ? sim.tuning.relight_cost : sim.tuning.lantern_cost;
+      hudInteractPrompt.textContent = nearLantern.everLit
+        ? `E — Thắp lại (${nearLantern.deposited}/${cost})`
+        : `E — Nạp ánh sáng (${nearLantern.deposited}/${cost})`;
+    } else {
+      const fuelPct = Math.round(nearLantern.fuelSixtieths / TICK_RATE);
+      hudInteractPrompt.textContent = `E — Châm dầu (${fuelPct}%)`;
+    }
     hudInteractPrompt.classList.remove('hidden');
   } else {
     hudInteractPrompt.classList.add('hidden');
   }
 
-  // Off-screen arrow pointing to nearest unlit lantern
-  if (nearestUnlit && uiMode === 'playing') {
-    const proj = scene.projectToScreen(nearestUnlit.pos);
+  // Off-screen arrow pointing to nearest unlit / low-fuel lantern
+  if (nearestPriority && uiMode === 'playing') {
+    const proj = scene.projectToScreen(nearestPriority.pos);
     if (!proj.onScreen) {
       const cx = window.innerWidth / 2;
       const cy = window.innerHeight / 2;
@@ -544,7 +603,7 @@ function updateHud(): void {
       lanternArrow.style.left = `${ax}px`;
       lanternArrow.style.top = `${ay}px`;
       lanternArrowIcon.style.transform = `rotate(${angle}rad)`;
-      lanternArrowDist.textContent = `${Math.round(nearestUnlitDist)}m`;
+      lanternArrowDist.textContent = `${Math.round(nearestPriorityDist)}m`;
       lanternArrow.classList.remove('hidden');
     } else {
       lanternArrow.classList.add('hidden');
@@ -595,7 +654,7 @@ function loop(now: number): void {
     camYawDeg = (camYawDeg + 8 * frameDt) % 360;
   }
 
-  scene.sync(sim, camYawDeg, frameDt);
+  scene.sync(sim, camYawDeg, frameDt, settings.colorblind);
   requestAnimationFrame(loop);
 }
 
